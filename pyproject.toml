@@ -1,0 +1,18 @@
+[project]
+name = "vienna-traffic-router"
+version = "1.0.0"
+description = "Vienna Traffic Router — 8 search algorithms + 22 Vienna-specific heuristics"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+    "python-dotenv>=1.0.1",
+    "requests>=2.31",
+    "numpy>=1.26",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
