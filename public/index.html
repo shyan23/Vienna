@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vienna Traffic Router</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗺️</text></svg>">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <header id="topbar">
+    <div class="topbar-left">
+      <span class="app-logo">🗺️</span>
+      <span class="app-title">Vienna Traffic Router</span>
+    </div>
+    <div class="topbar-center">
+      <button id="weather-badge" class="weather-badge" title="Click to refresh weather">
+        <span id="weather-icon">☀️</span>
+        <span id="weather-temp">—°C</span>
+        <span id="weather-desc" class="muted">loading…</span>
+      </button>
+    </div>
+    <div class="topbar-right">
+      <span class="mode-label muted">Mode</span>
+      <label class="mode-toggle">
+        <input type="checkbox" id="advanced-toggle">
+        <span class="toggle-track">
+          <span class="toggle-label-left">Simple</span>
+          <span class="toggle-thumb"></span>
+          <span class="toggle-label-right">Advanced</span>
+        </span>
+      </label>
+      <span id="heuristic-count-badge" class="heuristic-badge" title="Active heuristics">
+        <span id="heuristic-count">0</span> heuristics
+      </span>
+    </div>
+  </header>
+
+  <main id="app-layout">
+
+    <aside id="sidebar" class="sidebar">
+      <div id="sidebar-inner">
+
+        <section class="panel" id="panel-location">
+          <label class="field-label">
+            <span class="pin pin-start">A</span> Origin
+          </label>
+          <div class="location-input-wrap">
+            <input type="text" id="input-start" class="location-input"
+              placeholder="Click map to set origin…" autocomplete="off">
+            <button class="btn-locate" id="btn-locate" title="Use my location">📍</button>
+          </div>
+          <div id="start-coords" class="coord-display muted"></div>
+
+          <label class="field-label" style="margin-top:12px">
+            <span class="pin pin-goal">B</span> Destination
+          </label>
+          <div class="location-input-wrap">
+            <input type="text" id="input-goal" class="location-input"
+              placeholder="Click map to set destination…" autocomplete="off">
+          </div>
+          <div id="goal-coords" class="coord-display muted"></div>
+        </section>
+
+        <section class="panel" id="panel-vehicle">
+          <div class="panel-header">Vehicle</div>
+          <div class="vehicle-grid" id="vehicle-selector">
+            <button class="vehicle-btn active" data-vehicle="car"        title="Car">🚗</button>
+            <button class="vehicle-btn" data-vehicle="motorcycle"         title="Motorcycle">🏍️</button>
+            <button class="vehicle-btn" data-vehicle="taxi"               title="Taxi">🚕</button>
+            <button class="vehicle-btn" data-vehicle="bicycle"            title="Bicycle">🚴</button>
+            <button class="vehicle-btn" data-vehicle="escooter"           title="E-Scooter">🛴</button>
+            <button class="vehicle-btn" data-vehicle="walking"            title="Walking">🚶</button>
+            <button class="vehicle-btn" data-vehicle="bus"                title="Bus">🚌</button>
+            <button class="vehicle-btn" data-vehicle="metro"              title="Metro (U-Bahn)">🚇</button>
+            <button class="vehicle-btn" data-vehicle="train"              title="S-Bahn">🚂</button>
+            <button class="vehicle-btn" data-vehicle="truck"              title="HGV / Truck">🚛</button>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-profile">
+          <div class="panel-header">Route Profile</div>
+          <div class="profile-tabs" id="profile-selector">
+            <button class="profile-tab active" data-profile="fastest">
+              <span class="profile-icon">⚡</span>
+              <span>Fastest</span>
+            </button>
+            <button class="profile-tab" data-profile="safest">
+              <span class="profile-icon">🛡️</span>
+              <span>Safest</span>
+            </button>
+            <button class="profile-tab" data-profile="greenest">
+              <span class="profile-icon">🌿</span>
+              <span>Greenest</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-time">
+          <div class="panel-header">
+            Date &amp; Time
+            <label class="inline-toggle" title="Use current time">
+              <input type="checkbox" id="use-current-time" checked>
+              <span>Now</span>
+            </label>
+          </div>
+          <div class="time-row">
+            <input type="date" id="input-date" class="input-field">
+            <input type="time" id="input-time" class="input-field" step="900">
+          </div>
+          <div class="time-slider-wrap">
+            <span class="muted small">0h</span>
+            <input type="range" id="hour-slider" min="0" max="23" value="12" class="hour-slider">
+            <span class="muted small">23h</span>
+          </div>
+          <div id="time-label" class="time-label-display">12:00 · Weekday</div>
+        </section>
+
+        <section class="panel advanced-only" id="panel-conditions">
+          <div class="panel-header collapsible open" data-target="conditions-body">
+            ⛅ Conditions
+            <span class="chevron">›</span>
+          </div>
+          <div id="conditions-body" class="panel-body">
+            <div class="field-label">Weather</div>
+            <div class="weather-grid" id="weather-selector">
+              <button class="weather-btn active" data-weather="clear">☀️<br><small>Clear</small></button>
+              <button class="weather-btn" data-weather="cloudy">⛅<br><small>Cloudy</small></button>
+              <button class="weather-btn" data-weather="fog">🌫️<br><small>Fog</small></button>
+              <button class="weather-btn" data-weather="light_rain">🌦️<br><small>Light Rain</small></button>
+              <button class="weather-btn" data-weather="rain">🌧️<br><small>Rain</small></button>
+              <button class="weather-btn" data-weather="thunderstorm">⛈️<br><small>Storm</small></button>
+              <button class="weather-btn" data-weather="light_snow">🌨️<br><small>Light Snow</small></button>
+              <button class="weather-btn" data-weather="heavy_snow">❄️<br><small>Blizzard</small></button>
+            </div>
+            <button id="auto-weather-btn" class="btn-secondary small">🔄 Auto-detect from API</button>
+
+            <div class="slider-row">
+              <label>Temperature</label>
+              <input type="range" id="temp-slider" min="-15" max="40" value="15" class="param-slider">
+              <span class="slider-val" id="temp-val">15°C</span>
+            </div>
+            <div class="slider-row">
+              <label>Humidity</label>
+              <input type="range" id="humidity-slider" min="0" max="100" value="60" class="param-slider">
+              <span class="slider-val" id="humidity-val">60%</span>
+            </div>
+            <div class="slider-row">
+              <label>Visibility</label>
+              <input type="range" id="visibility-slider" min="50" max="5000" step="50" value="5000" class="param-slider">
+              <span class="slider-val" id="visibility-val">5.0 km</span>
+            </div>
+            <div class="slider-row">
+              <label>Wind speed</label>
+              <input type="range" id="wind-slider" min="0" max="30" value="3" class="param-slider">
+              <span class="slider-val" id="wind-val">3 m/s <span id="wind-dir">↗</span></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel advanced-only" id="panel-heuristics">
+          <div class="panel-header collapsible open" data-target="heuristics-body">
+            ⚙️ Heuristics
+            <span class="heuristic-sub-count" id="heuristic-sub-count">0 / 22 active</span>
+            <span class="chevron">›</span>
+          </div>
+          <div id="heuristics-body" class="panel-body">
+            <div class="heuristic-actions">
+              <button class="btn-ghost small" id="btn-enable-all">Enable All</button>
+              <button class="btn-ghost small" id="btn-disable-all">Disable All</button>
+            </div>
+            <div id="heuristic-list" class="heuristic-list"></div>
+
+            <div class="weight-breakdown" id="weight-breakdown">
+              <div class="panel-header small">Live Weight Breakdown</div>
+              <div id="weight-bars"></div>
+              <div class="composite-row">
+                Composite multiplier: <strong id="composite-mult">×1.0</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel advanced-only" id="panel-override">
+          <div class="panel-header collapsible" data-target="override-body">
+            🛣️ Manual Road Override
+            <span class="chevron">›</span>
+          </div>
+          <div id="override-body" class="panel-body collapsed">
+            <p class="muted small">Click any road segment on the map to select it.</p>
+            <div id="override-selected" class="override-selected hidden">
+              <div id="override-road-name" class="override-road-name">—</div>
+              <div class="override-road-meta" id="override-road-meta"></div>
+              <div class="slider-row">
+                <span class="small muted">🟢 Free</span>
+                <input type="range" id="override-slider" min="0" max="100" value="50" class="param-slider">
+                <span class="small muted">🔴 Jam</span>
+              </div>
+              <div class="override-val-display" id="override-val-display">50% — Normal</div>
+              <div class="override-actions">
+                <button class="btn-primary small" id="btn-apply-override">Apply</button>
+                <button class="btn-ghost small" id="btn-remove-override">Remove</button>
+                <button class="btn-ghost small" id="btn-reset-all-overrides">Reset All</button>
+              </div>
+            </div>
+            <div id="active-overrides" class="active-overrides"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-presets">
+          <div class="panel-header collapsible" data-target="presets-body">
+            🎬 Scenarios
+            <span class="chevron">›</span>
+          </div>
+          <div id="presets-body" class="panel-body collapsed">
+            <div class="preset-grid" id="preset-grid"></div>
+          </div>
+        </section>
+
+        <div class="find-routes-wrap">
+          <button id="btn-find-routes" class="btn-find-routes" disabled>
+            <span class="btn-icon">🔍</span>
+            <span class="btn-text">Find Routes</span>
+          </button>
+          <button id="btn-clear" class="btn-clear" title="Clear markers and results">✕</button>
+        </div>
+
+      </div>
+    </aside>
+
+    <div id="map-container">
+      <div id="map"></div>
+
+      <div id="overlay-controls">
+        <div class="overlay-label">Overlays</div>
+        <button class="overlay-btn" data-overlay="traffic"  title="Traffic heatmap">🌡️</button>
+        <button class="overlay-btn" data-overlay="snow"     title="Snow priority">❄️</button>
+        <button class="overlay-btn" data-overlay="events"   title="Event closures">🎭</button>
+        <button class="overlay-btn" data-overlay="schools"  title="School zones">🏫</button>
+        <button class="overlay-btn" data-overlay="scenic"   title="Scenic corridors">🌿</button>
+        <button class="overlay-btn" data-overlay="markets"  title="Saturday markets">🛒</button>
+        <button class="overlay-btn" data-overlay="hotspots" title="Tourist hotspots">🏛️</button>
+        <button class="overlay-btn" data-overlay="roadworks" title="Road works">🚧</button>
+        <button class="overlay-btn" data-overlay="wind"     title="Wind direction">💨</button>
+      </div>
+
+      <div id="map-loading" class="map-loading hidden">
+        <div class="spinner"></div>
+        <div id="loading-text">Computing 8 algorithms…</div>
+      </div>
+    </div>
+
+    <div id="results-drawer" class="results-drawer collapsed">
+      <div id="drawer-handle" class="drawer-handle">
+        <div class="handle-bar"></div>
+        <span id="drawer-summary" class="drawer-summary">Click Find Routes to compare 8 algorithms</span>
+        <button id="drawer-toggle" class="btn-ghost small">▲ Expand</button>
+      </div>
+      <div id="drawer-body" class="drawer-body">
+        <div class="results-header">
+          <div class="results-title">
+            <span id="results-route-label">—</span>
+          </div>
+          <div class="results-meta" id="results-meta"></div>
+          <div class="results-sort">
+            Sort:
+            <button class="sort-btn active" data-sort="distance">Distance</button>
+            <button class="sort-btn" data-sort="time">Time</button>
+            <button class="sort-btn" data-sort="nodes">Nodes</button>
+            <button class="sort-btn" data-sort="compute">Speed</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table id="results-table" class="results-table">
+            <thead>
+              <tr>
+                <th>Algorithm</th>
+                <th>Distance</th>
+                <th>Est. Time</th>
+                <th class="col-nodes">Nodes</th>
+                <th class="col-compute">Compute</th>
+                <th>Gap</th>
+              </tr>
+            </thead>
+            <tbody id="results-tbody"></tbody>
+          </table>
+        </div>
+
+        <div class="results-footer">
+          <div id="results-footer-stats" class="footer-stats"></div>
+          <div class="results-actions">
+            <button class="btn-ghost small" id="btn-explainer">📊 Algorithm Explainer</button>
+            <button class="btn-ghost small" id="btn-export-json">📤 Export JSON</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <div id="explainer-modal" class="modal hidden">
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <span class="modal-title">Algorithm Explainer</span>
+        <button class="modal-close" id="btn-modal-close">✕</button>
+      </div>
+      <div class="modal-tabs" id="explainer-tabs"></div>
+      <div class="modal-body" id="explainer-body"></div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="btn-explainer-prev">◄ Previous</button>
+        <button class="btn-ghost" id="btn-explainer-next">Next ►</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/map.js"></script>
+  <script src="/js/sidebar.js"></script>
+  <script src="/js/overlays.js"></script>
+  <script src="/js/results.js"></script>
+  <script src="/js/explainer.js"></script>
+  <script src="/js/presets.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
