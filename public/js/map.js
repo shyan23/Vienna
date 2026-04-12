@@ -4,10 +4,12 @@ const MapManager = (() => {
   let startMarker = null;
   let goalMarker  = null;
   let routeLayers = {};      // algoKey -> L.polyline
+  let bboxLayer   = null;    // graph coverage rectangle
   let selectedKey = null;
   let onStartChange = null;
   let onGoalChange  = null;
   let onRoadClick   = null;
+  let getPendingChange = null;  // () => 'start' | 'goal' | null
 
   // distinct, high-contrast colors for the 8 algorithms
   const ALGO_COLORS = {
@@ -55,20 +57,22 @@ const MapManager = (() => {
 
     map.on('click', (ev) => {
       const { lat, lng } = ev.latlng;
-      if (!startMarker) {
+      const pending = getPendingChange ? getPendingChange() : null;
+
+      if (pending === 'start') {
+        setStartMarker(lat, lng);
+        onStartChange && onStartChange(lat, lng);
+      } else if (pending === 'goal') {
+        setGoalMarker(lat, lng);
+        onGoalChange && onGoalChange(lat, lng);
+      } else if (!startMarker) {
         setStartMarker(lat, lng);
         onStartChange && onStartChange(lat, lng);
       } else if (!goalMarker) {
         setGoalMarker(lat, lng);
         onGoalChange && onGoalChange(lat, lng);
-      } else {
-        // Shift = move goal, otherwise move start
-        if (ev.originalEvent.shiftKey) {
-          setGoalMarker(lat, lng); onGoalChange && onGoalChange(lat, lng);
-        } else {
-          setStartMarker(lat, lng); onStartChange && onStartChange(lat, lng);
-        }
       }
+      // Both set and no pending change → ignore clicks (use ✎ buttons to change)
     });
 
     return map;
@@ -130,13 +134,38 @@ const MapManager = (() => {
     }
   }
 
-  function onStart(fn) { onStartChange = fn; }
-  function onGoal(fn)  { onGoalChange  = fn; }
-  function getMap()    { return map; }
+  function drawGraphBbox(bbox) {
+    // bbox = [min_lat, min_lon, max_lat, max_lon]
+    if (!bbox || bbox.length < 4) return;
+    if (bboxLayer) map.removeLayer(bboxLayer);
+
+    const [minLat, minLon, maxLat, maxLon] = bbox;
+    const bounds = [[minLat, minLon], [maxLat, maxLon]];
+
+    bboxLayer = L.rectangle(bounds, {
+      color:     '#C9A84C',   // gold accent
+      weight:    2,
+      opacity:   0.8,
+      fillColor: '#C9A84C',
+      fillOpacity: 0.04,
+      dashArray: '6 4',
+      interactive: false,
+    }).addTo(map);
+
+    bboxLayer.bindTooltip(
+      '📍 Graph coverage — click inside this area to set Origin / Destination',
+      { permanent: false, direction: 'center', className: 'bbox-tooltip' }
+    );
+  }
+
+  function onStart(fn)         { onStartChange   = fn; }
+  function onGoal(fn)          { onGoalChange    = fn; }
+  function onPendingChange(fn) { getPendingChange = fn; }
+  function getMap()            { return map; }
 
   return {
     init, setStartMarker, setGoalMarker, clearMarkers,
-    drawRoutes, selectRoute, clearRoutes,
-    onStart, onGoal, getMap, ALGO_COLORS,
+    drawRoutes, selectRoute, clearRoutes, drawGraphBbox,
+    onStart, onGoal, onPendingChange, getMap, ALGO_COLORS,
   };
 })();

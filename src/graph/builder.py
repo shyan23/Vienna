@@ -195,42 +195,36 @@ def enrich_way_tags(tags: dict) -> dict:
 # Node curation
 # --------------------------------------------------------------------------- #
 
-def select_nodes(nodes: dict, ways: list, target: int = 1000) -> set[str]:
+def select_nodes(nodes: dict, ways: list, target: int = 5000) -> set[str]:
     """
-    Return a set of node IDs representing the curated subgraph.
+    Return a set of node IDs representing the curated subgraph, capped at target.
 
-    Priorities:
-      1. 1st district intersections
-      2. Major arteries (motorway/trunk/primary/secondary)
-      3. Bridges
-      4. Tourist hotspot neighbourhoods (within ~600 m)
-      5. U-Bahn / S-Bahn station nodes
-      6. Sampled residential nodes per district
+    Priorities (higher = selected first):
+      5 — 1st district intersections (degree ≥ 2)
+      4 — Major arteries (motorway/trunk/primary/secondary) and bridges
+      3 — Tourist hotspot neighbourhoods (within ~600 m)
+      2 — U-Bahn / S-Bahn station nodes
+      1 — Sampled residential nodes per district
     """
-    selected: set[str] = set()
-
     # Build node-degree counter
     node_way_count: dict[str, int] = {}
     for way in ways:
         for nid in way["nodes"]:
             node_way_count[nid] = node_way_count.get(nid, 0) + 1
 
+    # Assign priority scores to every node
+    scores: dict[str, int] = {}
+
+    def add(nid: str, score: int) -> None:
+        if nid in nodes:
+            scores[nid] = max(scores.get(nid, 0), score)
+
+    # Priority 5 — 1st district intersections
     for nid, node in nodes.items():
-        lat, lon = node["lat"], node["lon"]
-        district = get_district(lat, lon)
+        if get_district(node["lat"], node["lon"]) == "1" and node_way_count.get(nid, 0) >= 2:
+            add(nid, 5)
 
-        # Priority 1 — 1st district intersections
-        if district == "1" and node_way_count.get(nid, 0) >= 2:
-            selected.add(nid)
-            continue
-
-        # Priority 4 — tourist hotspots
-        for (hlat, hlon, _name) in TOURIST_HOTSPOTS:
-            if haversine(lat, lon, hlat, hlon) < 600:
-                selected.add(nid)
-                break
-
-    # Priorities 2 & 3 — major roads and bridges
+    # Priority 4 — major roads and bridges
     for way in ways:
         tags = way["tags"]
         road_type = tags.get("highway", tags.get("railway", ""))
@@ -243,27 +237,37 @@ def select_nodes(nodes: dict, ways: list, target: int = 1000) -> set[str]:
         )
         if is_major or is_bridge:
             for nid in way["nodes"]:
-                selected.add(nid)
+                add(nid, 4)
 
-    # Priority 5 — U-Bahn / S-Bahn station nodes
+    # Priority 3 — tourist hotspot neighbourhoods
+    for nid, node in nodes.items():
+        lat, lon = node["lat"], node["lon"]
+        for (hlat, hlon, _name) in TOURIST_HOTSPOTS:
+            if haversine(lat, lon, hlat, hlon) < 600:
+                add(nid, 3)
+                break
+
+    # Priority 2 — transit station nodes
     for nid, node in nodes.items():
         ntags = node.get("tags", {})
-        if ntags.get("railway") in ("station", "stop", "halt"):
-            selected.add(nid)
-        if ntags.get("public_transport") == "station":
-            selected.add(nid)
+        if ntags.get("railway") in ("station", "stop", "halt") or ntags.get("public_transport") == "station":
+            add(nid, 2)
 
-    # Priority 6 — sample residential nodes per district (~10 per district)
+    # Priority 1 — sampled residential nodes per district
     per_district: dict[str, list[str]] = {}
     for nid, node in nodes.items():
         d = get_district(node["lat"], node["lon"])
         per_district.setdefault(d, []).append(nid)
     for _d, nids in per_district.items():
-        step = max(1, len(nids) // 10)
+        step = max(1, len(nids) // 50)
         for nid in nids[::step]:
-            selected.add(nid)
+            add(nid, 1)
 
-    print(f"[Builder] Selected {len(selected):,} nodes after curation")
+    # Sort by score descending, take top `target`
+    ranked = sorted(scores.keys(), key=lambda n: scores[n], reverse=True)
+    selected = set(ranked[:target])
+
+    print(f"[Builder] Selected {len(selected):,} nodes after curation (target={target})")
     return selected
 
 
@@ -322,23 +326,62 @@ def build_graph(nodes: dict, ways: list, selected_node_ids: set[str]) -> dict:
                 "snow_priority": snow_priority,
             }
 
-            # Forward edge
-            if not enriched["oneway_reverse"]:
-                edge_idx = len(edges)
-                edges.append(edge)
-                adjacency[n1].append({"node": n2, "edge_idx": edge_idx})
+            # Always add both directions — the curated subgraph is too sparse
+            # for one-way streets to make sense; forcing bidirectionality
+            # guarantees routability across the simplified network.
+            edge_idx = len(edges)
+            edges.append(edge)
+            adjacency[n1].append({"node": n2, "edge_idx": edge_idx})
 
-            # Reverse edge (bidirectional unless strictly oneway forward)
-            if not enriched["oneway"] or enriched["oneway_reverse"]:
-                rev_edge = {**edge, "from": n2, "to": n1}
-                rev_idx = len(edges)
-                edges.append(rev_edge)
-                adjacency[n2].append({"node": n1, "edge_idx": rev_idx})
+            rev_edge = {**edge, "from": n2, "to": n1}
+            rev_idx = len(edges)
+            edges.append(rev_edge)
+            adjacency[n2].append({"node": n1, "edge_idx": rev_idx})
 
-    # Prune isolated nodes (no incident edges)
-    connected = {n for n, adj in adjacency.items() if adj}
-    graph_nodes = {n: v for n, v in graph_nodes.items() if n in connected}
-    adjacency = {n: v for n, v in adjacency.items() if n in connected}
+    # ------------------------------------------------------------------ #
+    # Keep only the largest connected component (BFS flood-fill).        #
+    # With bidirectional edges this guarantees full routability.          #
+    # ------------------------------------------------------------------ #
+
+    visited: set[str] = set()
+    components: list[set[str]] = []
+    for start in graph_nodes:
+        if start in visited:
+            continue
+        component: set[str] = set()
+        queue = [start]
+        while queue:
+            node = queue.pop()
+            if node in visited:
+                continue
+            visited.add(node)
+            component.add(node)
+            for e in adjacency.get(node, []):
+                if e["node"] not in visited:
+                    queue.append(e["node"])
+        components.append(component)
+
+    largest = max(components, key=len) if components else set()
+    print(f"[Builder] Components: {len(components)}, largest: {len(largest)} nodes")
+
+    graph_nodes = {n: v for n, v in graph_nodes.items() if n in largest}
+    adjacency = {
+        n: [e for e in adj if e["node"] in largest]
+        for n, adj in adjacency.items()
+        if n in largest
+    }
+    # Re-index edges — keep only edges whose both endpoints survived
+    surviving = {e["edge_idx"] for adj in adjacency.values() for e in adj}
+    edges = [e for i, e in enumerate(edges) if i in surviving]
+    old_to_new = {old: new for new, old in enumerate(sorted(surviving))}
+    for adj in adjacency.values():
+        for e in adj:
+            e["edge_idx"] = old_to_new[e["edge_idx"]]
+
+    # Compute actual bounding box from surviving nodes
+    lats = [n["lat"] for n in graph_nodes.values()]
+    lons = [n["lon"] for n in graph_nodes.values()]
+    actual_bbox = [min(lats), min(lons), max(lats), max(lons)] if lats else list(VIENNA_BBOX)
 
     return {
         "nodes": graph_nodes,
@@ -347,6 +390,6 @@ def build_graph(nodes: dict, ways: list, selected_node_ids: set[str]) -> dict:
         "meta": {
             "node_count": len(graph_nodes),
             "edge_count": len(edges),
-            "bbox": list(VIENNA_BBOX),
+            "bbox": actual_bbox,
         },
     }

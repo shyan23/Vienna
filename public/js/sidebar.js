@@ -38,13 +38,12 @@ const Sidebar = (() => {
 
   const state = {
     vehicle: 'car',
-    profile: 'fastest',
     weather: 'clear',
     temperature: 15, humidity: 60, visibility_m: 5000,
     wind_speed: 3,   wind_deg: 180,
-    hour: 12, minute: 0, day_of_week: 1, month: 4, date: todayISO(),
-    useNow: true,
-    advanced: false,
+    hour: new Date().getHours(), minute: new Date().getMinutes(),
+    day_of_week: new Date().getDay(), month: new Date().getMonth() + 1,
+    date: todayISO(),
     start: null, goal: null,
   };
 
@@ -120,14 +119,6 @@ const Sidebar = (() => {
     });
   }
 
-  function bindAdvancedToggle() {
-    const cb = document.getElementById('advanced-toggle');
-    cb.addEventListener('change', () => {
-      state.advanced = cb.checked;
-      document.body.classList.toggle('advanced-mode', cb.checked);
-    });
-  }
-
   function bindCollapsibles() {
     document.querySelectorAll('.panel-header.collapsible').forEach(h => {
       h.addEventListener('click', () => {
@@ -139,60 +130,13 @@ const Sidebar = (() => {
     });
   }
 
-  function bindTimeControls() {
-    const useNow = document.getElementById('use-current-time');
-    const dateInput = document.getElementById('input-date');
-    const timeInput = document.getElementById('input-time');
-    const slider = document.getElementById('hour-slider');
-    const label = document.getElementById('time-label');
-
-    function applyNow() {
-      const now = new Date();
-      state.date = now.toISOString().slice(0, 10);
-      state.hour = now.getHours();
-      state.minute = now.getMinutes();
-      state.day_of_week = now.getDay();
-      state.month = now.getMonth() + 1;
-      dateInput.value = state.date;
-      timeInput.value = `${String(state.hour).padStart(2,'0')}:${String(state.minute).padStart(2,'0')}`;
-      slider.value = state.hour;
-      updateTimeLabel();
-    }
-    function updateTimeLabel() {
-      const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][state.day_of_week];
-      const isWeekend = state.day_of_week === 0 || state.day_of_week === 6;
-      label.textContent =
-        `${String(state.hour).padStart(2,'0')}:${String(state.minute).padStart(2,'0')} · ${dow}${isWeekend ? ' (Weekend)' : ''}`;
-    }
-
-    useNow.addEventListener('change', () => {
-      state.useNow = useNow.checked;
-      if (useNow.checked) applyNow();
-    });
-    dateInput.addEventListener('change', () => {
-      state.useNow = false; useNow.checked = false;
-      state.date = dateInput.value;
-      const d = new Date(dateInput.value);
-      state.day_of_week = d.getDay();
-      state.month = d.getMonth() + 1;
-      updateTimeLabel();
-    });
-    timeInput.addEventListener('change', () => {
-      state.useNow = false; useNow.checked = false;
-      const [h, m] = timeInput.value.split(':').map(Number);
-      state.hour = h; state.minute = m;
-      slider.value = h;
-      updateTimeLabel();
-    });
-    slider.addEventListener('input', () => {
-      state.useNow = false; useNow.checked = false;
-      state.hour = parseInt(slider.value, 10);
-      timeInput.value = `${String(state.hour).padStart(2,'0')}:00`;
-      state.minute = 0;
-      updateTimeLabel();
-    });
-
-    applyNow();
+  function syncTimeFromNow() {
+    const now = new Date();
+    state.hour = now.getHours();
+    state.minute = now.getMinutes();
+    state.day_of_week = now.getDay();
+    state.month = now.getMonth() + 1;
+    state.date = now.toISOString().slice(0, 10);
   }
 
   function bindConditionSliders() {
@@ -216,11 +160,11 @@ const Sidebar = (() => {
 
   function buildRequest() {
     if (!state.start || !state.goal) return null;
+    syncTimeFromNow();
     return {
       start_lat: state.start[0], start_lon: state.start[1],
       goal_lat:  state.goal[0],  goal_lon:  state.goal[1],
       vehicle_type: state.vehicle,
-      route_profile: state.profile,
       weather: state.weather,
       temperature: state.temperature,
       humidity: state.humidity,
@@ -238,15 +182,14 @@ const Sidebar = (() => {
   function setGoal (lat, lon) { state.goal  = [lat, lon]; }
 
   function init() {
-    bindAdvancedToggle();
     bindCollapsibles();
     bindSelectorGroup('vehicle-selector', 'vehicle', 'vehicle');
-    bindSelectorGroup('profile-selector', 'profile', 'profile');
     bindSelectorGroup('weather-selector', 'weather', 'weather');
-    bindTimeControls();
     bindConditionSliders();
     renderHeuristicList();
     bindEnableAllButtons();
+    // Always advanced mode — make all advanced-only panels visible
+    document.body.classList.add('advanced-mode');
   }
 
   return {

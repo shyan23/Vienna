@@ -869,3 +869,48 @@ body.advanced-mode .advanced-only { display: block; }
   #sidebar { max-height: 50vh; border-right: none; border-bottom: 1px solid var(--border); }
   .results-drawer { left: 0; }
 }
+
+/* ===== I. Change-marker buttons & Traffic Boost (Issues 2, 5) ===== */
+.btn-change {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: 4px;
+  transition: background 0.15s;
+}
+.btn-change:hover { background: var(--accent-dim); }
+
+.traffic-boost-panel {
+  margin: 10px 16px;
+  background: var(--bg-3);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.traffic-boost-panel.hidden { display: none; }
+.traffic-boost-header {
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--warn);
+}
+.traffic-boost-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ===== J. Graph bbox tooltip ===== */
+.bbox-tooltip {
+  background: #10161d;
+  border: 1px solid #C9A84C;
+  color: #C9A84C;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.bbox-tooltip::before { display: none; }

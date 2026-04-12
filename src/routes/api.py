@@ -1,11 +1,16 @@
 """HTTP API for the Vienna Traffic Router."""
 from __future__ import annotations
 
+import logging
 import os
+import traceback
 
 import httpx
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+log = logging.getLogger("api")
 
 router = APIRouter()
 
@@ -24,7 +29,6 @@ class FindPathRequest(BaseModel):
     date: str = "2026-04-11"
 
     vehicle_type: str = "car"
-    route_profile: str = "fastest"  # fastest | safest | greenest
 
     temperature: float = 15.0
     humidity: float = 60.0
@@ -48,20 +52,33 @@ _overrides: dict[str, int] = {}
 
 @router.post("/find-path")
 async def find_path(req: FindPathRequest):
-    from src.algorithms.runner import run_all
-    from src.heuristics.combined import make_heuristic
+    try:
+        from src.algorithms.runner import run_all
+        from src.heuristics.combined import make_heuristic
 
-    params = req.model_dump()
-    params["manual_overrides_map"] = dict(_overrides)
+        log.info("find-path  start=(%.5f,%.5f)  goal=(%.5f,%.5f)  weather=%s",
+                 req.start_lat, req.start_lon, req.goal_lat, req.goal_lon, req.weather)
 
-    heuristic_fn = make_heuristic(params)
-    result = run_all(
-        req.start_lat, req.start_lon,
-        req.goal_lat, req.goal_lon,
-        params,
-        heuristic_fn,
-    )
-    return result
+        params = req.model_dump()
+        # Merge persistent overrides with per-request overrides (weather events, boost)
+        merged = dict(_overrides)
+        for ov in (req.manual_overrides or []):
+            if isinstance(ov, dict) and "edge_id" in ov:
+                merged[ov["edge_id"]] = ov.get("intensity", 50)
+        params["manual_overrides_map"] = merged
+
+        heuristic_fn = make_heuristic(params)
+        result = run_all(
+            req.start_lat, req.start_lon,
+            req.goal_lat, req.goal_lon,
+            params,
+            heuristic_fn,
+        )
+        return result
+    except Exception as e:  # noqa: BLE001
+        tb = traceback.format_exc()
+        log.error("find-path FAILED: %s\n%s", e, tb)
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": tb})
 
 
 @router.post("/manual-override")

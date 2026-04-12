@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  backend:
+    build: .
+    container_name: vienna-backend
+    env_file:
+      - .env.example
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+  frontend:
+    image: nginx:alpine
+    container_name: vienna-frontend
+    volumes:
+      - ./public:/usr/share/nginx/html:ro
+      - ./public/css:/usr/share/nginx/html/css:ro
+      - ./public/js:/usr/share/nginx/html/js:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
