@@ -10,12 +10,15 @@ from src.algorithms.base import (
     PathResult,
     coords_for_path,
     reconstruct_path,
+    sum_path_distance,
 )
-from src.graph.loader import get_edge_cost, get_neighbors
+from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathResult:
     t0 = time.perf_counter()
+    params = params or {}
+    overrides = params.get("manual_overrides_map")
 
     tiebreak = itertools.count()
     heap: list[tuple[float, int, str]] = [(0.0, next(tiebreak), start_id)]
@@ -33,19 +36,20 @@ def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathR
 
         if current == goal_id:
             path = reconstruct_path(prev, goal_id)
+            real_dist = sum_path_distance(graph, path)
             return PathResult(
                 algorithm="ucs",
                 path_node_ids=path,
                 path_coords=coords_for_path(graph, path),
-                distance_m=dist[goal_id],
-                estimated_time_s=dist[goal_id] / DEFAULT_SPEED_MS,
+                distance_m=real_dist,
+                estimated_time_s=real_dist / DEFAULT_SPEED_MS,
                 nodes_expanded=nodes_expanded,
                 compute_time_ms=(time.perf_counter() - t0) * 1000,
             )
 
         for nb in get_neighbors(graph, current):
             nid = nb["node"]
-            new_dist = g + get_edge_cost(graph, nb["edge_idx"])
+            new_dist = g + get_effective_edge_cost(graph, nb["edge_idx"], overrides)
             if new_dist < dist.get(nid, float("inf")):
                 dist[nid] = new_dist
                 prev[nid] = current

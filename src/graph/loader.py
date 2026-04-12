@@ -47,6 +47,26 @@ def get_edge_cost(graph: dict, edge_idx: int) -> float:
     return graph["edges"][edge_idx]["distance_m"]
 
 
+def get_effective_edge_cost(
+    graph: dict, edge_idx: int, overrides_map: dict[str, int] | None = None
+) -> float:
+    """Edge cost with manual traffic overrides applied.
+
+    intensity 0..100 → multiplier 0.5..3.0 (same formula as manual_adjustment.py).
+    If no override exists for this edge, returns raw distance_m.
+    """
+    edge = graph["edges"][edge_idx]
+    base = edge["distance_m"]
+    if not overrides_map:
+        return base
+    edge_key = f'{edge["from"]}_{edge["to"]}'
+    if edge_key not in overrides_map:
+        return base
+    intensity = overrides_map[edge_key]
+    multiplier = 0.5 + (intensity / 100.0) * 2.5
+    return base * multiplier
+
+
 def nearest_node(graph: dict, lat: float, lon: float) -> str:
     """Find the graph node closest to a lat/lon coordinate."""
     from src.graph.builder import haversine

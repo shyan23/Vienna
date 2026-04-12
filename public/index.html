@@ -6,11 +6,11 @@
   <title>Vienna Traffic Router</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗺️</text></svg>">
 
-  <link rel="stylesheet" href="/fonts/fonts_local.css?v=3">
-  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=3"/>
-  <script src="/vendor/leaflet/leaflet.js?v=3"></script>
+  <link rel="stylesheet" href="/fonts/fonts_local.css?v=10">
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css?v=10"/>
+  <script src="/vendor/leaflet/leaflet.js?v=10"></script>
 
-  <link rel="stylesheet" href="/css/style.css?v=3">
+  <link rel="stylesheet" href="/css/style.css?v=10">
 </head>
 <body>
 
@@ -144,6 +144,23 @@
         </section>
 
 
+        <section class="panel" id="panel-traffic">
+          <div class="panel-header collapsible" data-target="traffic-body">
+            🚦 Manual Traffic Override
+            <span class="chevron">›</span>
+          </div>
+          <div id="traffic-body" class="panel-body collapsed">
+            <p class="muted small">1. Find Routes first, then click a route row in the results table to select it.</p>
+            <p class="muted small">2. Use the traffic slider that appears below the table to boost traffic on that route.</p>
+            <p class="muted small">3. Click "Apply &amp; Re-calculate" to see alternate routes.</p>
+            <div id="weather-blocked-info" class="weather-blocked-info hidden">
+              <div class="weather-blocked-label">⚠️ Affected roads:</div>
+              <div id="weather-blocked-list" class="weather-blocked-list"></div>
+            </div>
+            <button id="btn-reset-all-traffic" class="btn-secondary small" style="margin-top:8px;display:none">✕ Reset All Traffic Overrides</button>
+          </div>
+        </section>
+
         <section class="panel" id="panel-presets">
           <div class="panel-header collapsible" data-target="presets-body">
             🎬 Scenarios
@@ -168,18 +185,6 @@
     <div id="map-container">
       <div id="map"></div>
 
-      <div id="overlay-controls">
-        <div class="overlay-label">Overlays</div>
-        <button class="overlay-btn" data-overlay="traffic"  title="Traffic heatmap">🌡️</button>
-        <button class="overlay-btn" data-overlay="snow"     title="Snow priority">❄️</button>
-        <button class="overlay-btn" data-overlay="events"   title="Event closures">🎭</button>
-        <button class="overlay-btn" data-overlay="schools"  title="School zones">🏫</button>
-        <button class="overlay-btn" data-overlay="scenic"   title="Scenic corridors">🌿</button>
-        <button class="overlay-btn" data-overlay="markets"  title="Saturday markets">🛒</button>
-        <button class="overlay-btn" data-overlay="hotspots" title="Tourist hotspots">🏛️</button>
-        <button class="overlay-btn" data-overlay="roadworks" title="Road works">🚧</button>
-        <button class="overlay-btn" data-overlay="wind"     title="Wind direction">💨</button>
-      </div>
 
       <div id="map-loading" class="map-loading hidden">
         <div class="spinner"></div>
@@ -217,7 +222,6 @@
                 <th>Est. Time</th>
                 <th class="col-nodes">Nodes</th>
                 <th class="col-compute">Compute</th>
-                <th>Gap</th>
               </tr>
             </thead>
             <tbody id="results-tbody"></tbody>
@@ -239,6 +243,15 @@
             <button class="btn-primary small" id="btn-boost-recalculate">🔄 Apply &amp; Re-calculate</button>
             <button class="btn-ghost small" id="btn-boost-reset">✕ Reset Traffic</button>
           </div>
+        </div>
+
+        <!-- Path detail — lazy-loaded when a route row is clicked -->
+        <div id="path-detail-panel" class="path-detail-panel hidden">
+          <div class="path-detail-header">
+            <span id="path-detail-title">—</span>
+            <button class="btn-ghost small" id="btn-path-detail-close">✕</button>
+          </div>
+          <div id="path-detail-list" class="path-detail-list"></div>
         </div>
 
         <div class="results-footer">
@@ -269,13 +282,13 @@
     </div>
   </div>
 
-  <script src="/js/api.js?v=3"></script>
-  <script src="/js/map.js?v=3"></script>
-  <script src="/js/sidebar.js?v=3"></script>
-  <script src="/js/overlays.js?v=3"></script>
-  <script src="/js/results.js?v=3"></script>
-  <script src="/js/explainer.js?v=3"></script>
-  <script src="/js/presets.js?v=3"></script>
-  <script src="/js/app.js?v=3"></script>
+  <script src="/js/api.js?v=10"></script>
+  <script src="/js/map.js?v=10"></script>
+  <script src="/js/sidebar.js?v=10"></script>
+  <script src="/js/overlays.js?v=10"></script>
+  <script src="/js/results.js?v=10"></script>
+  <script src="/js/explainer.js?v=10"></script>
+  <script src="/js/presets.js?v=10"></script>
+  <script src="/js/app.js?v=10"></script>
 </body>
 </html>

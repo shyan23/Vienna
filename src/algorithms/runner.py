@@ -122,6 +122,13 @@ def run_all(
     total_ms = (time.perf_counter() - t_total) * 1000
     log.info("DONE   total=%.1f ms", total_ms)
 
+    # Recalculate estimated_time_s using vehicle-specific speed
+    from src.algorithms.base import speed_for_vehicle
+    vehicle_speed = speed_for_vehicle(params.get("vehicle_type", "car"))
+    for r in results.values():
+        if r.distance_m > 0:
+            r.estimated_time_s = r.distance_m / vehicle_speed
+
     # Dijkstra is the optimal ground truth
     optimal_dist = results["dijkstra"].distance_m if "dijkstra" in results else -1
     for r in results.values():

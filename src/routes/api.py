@@ -154,12 +154,45 @@ async def graph_stats():
     return g["meta"]
 
 
+@router.get("/graph/nodes")
+async def graph_nodes():
+    """Return node id -> {lat, lon} for drawing blocked roads on the map."""
+    from src.graph.loader import load_graph
+
+    g = load_graph()
+    return {nid: {"lat": n["lat"], "lon": n["lon"]} for nid, n in g["nodes"].items()}
+
+
 @router.get("/graph/bbox")
 async def graph_bbox():
     from src.graph.loader import load_graph
 
     g = load_graph()
     return {"bbox": g["meta"]["bbox"]}
+
+
+@router.post("/graph/edge-names")
+async def edge_names(body: dict):
+    """Look up street names for a list of edge_id strings (e.g. '123_456')."""
+    from src.graph.loader import load_graph
+
+    g = load_graph()
+    edge_ids = body.get("edge_ids", [])
+    adjacency = g["adjacency"]
+    edges = g["edges"]
+    result: dict[str, str] = {}
+    for eid in edge_ids:
+        parts = eid.split("_")
+        if len(parts) != 2:
+            continue
+        from_id, to_id = parts
+        name = ""
+        for nb in adjacency.get(from_id, []):
+            if nb["node"] == to_id:
+                name = edges[nb["edge_idx"]].get("name", "") or ""
+                break
+        result[eid] = name or f"Road {from_id[:6]}…{to_id[:6]}"
+    return result
 
 
 @router.get("/events/{date}")

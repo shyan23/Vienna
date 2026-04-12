@@ -10,13 +10,15 @@ from src.algorithms.base import (
     PathResult,
     coords_for_path,
     reconstruct_path,
+    sum_path_distance,
 )
-from src.graph.loader import get_edge_cost, get_neighbors
+from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult:
     t0 = time.perf_counter()
     params = params or {}
+    overrides = params.get("manual_overrides_map")
 
     tiebreak = itertools.count()
     g_start = 0.0
@@ -36,12 +38,13 @@ def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult
 
         if current == goal_id:
             path = reconstruct_path(prev, goal_id)
+            real_dist = sum_path_distance(graph, path)
             return PathResult(
                 algorithm="astar",
                 path_node_ids=path,
                 path_coords=coords_for_path(graph, path),
-                distance_m=g_score[goal_id],
-                estimated_time_s=g_score[goal_id] / DEFAULT_SPEED_MS,
+                distance_m=real_dist,
+                estimated_time_s=real_dist / DEFAULT_SPEED_MS,
                 nodes_expanded=nodes_expanded,
                 compute_time_ms=(time.perf_counter() - t0) * 1000,
             )
@@ -51,7 +54,7 @@ def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult
             nid = nb["node"]
             if nid in closed:
                 continue
-            tentative = g_current + get_edge_cost(graph, nb["edge_idx"])
+            tentative = g_current + get_effective_edge_cost(graph, nb["edge_idx"], overrides)
             if tentative < g_score.get(nid, float("inf")):
                 g_score[nid] = tentative
                 prev[nid] = current

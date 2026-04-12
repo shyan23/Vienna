@@ -65,10 +65,8 @@ const Presets = (() => {
 
   function applyPatch(patch) {
     for (const [k, v] of Object.entries(patch)) {
-      if (k === 'vehicle' || k === 'profile' || k === 'weather') {
-        const selGroupId =
-          k === 'vehicle' ? 'vehicle-selector' :
-          k === 'profile' ? 'profile-selector' : 'weather-selector';
+      if (k === 'vehicle' || k === 'weather') {
+        const selGroupId = k === 'vehicle' ? 'vehicle-selector' : 'weather-selector';
         const group = document.getElementById(selGroupId);
         if (group) {
           group.querySelectorAll(`[data-${k}]`).forEach(b => b.classList.remove('active'));
@@ -78,22 +76,23 @@ const Presets = (() => {
       }
       Sidebar.state[k] = v;
     }
-    // Re-sync visible inputs
+    // Re-sync visible date/time inputs (if they exist — Date & Time panel may be removed)
     const dateInput = document.getElementById('input-date');
     const timeInput = document.getElementById('input-time');
     const hourSlider = document.getElementById('hour-slider');
-    if (patch.date)  dateInput.value = patch.date;
-    if (patch.hour != null) {
+    if (dateInput && patch.date) dateInput.value = patch.date;
+    if (timeInput && patch.hour != null) {
       timeInput.value = `${String(patch.hour).padStart(2,'0')}:${String(patch.minute||0).padStart(2,'0')}`;
-      hourSlider.value = patch.hour;
+      if (hourSlider) hourSlider.value = patch.hour;
     }
-    // Also refresh the label manually
     const label = document.getElementById('time-label');
-    const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][Sidebar.state.day_of_week];
-    label.textContent =
-      `${String(Sidebar.state.hour).padStart(2,'0')}:${String(Sidebar.state.minute).padStart(2,'0')} · ${dow}`;
-    document.getElementById('use-current-time').checked = false;
-    Sidebar.state.useNow = false;
+    if (label) {
+      const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][Sidebar.state.day_of_week];
+      label.textContent =
+        `${String(Sidebar.state.hour).padStart(2,'0')}:${String(Sidebar.state.minute).padStart(2,'0')} · ${dow}`;
+    }
+    const useNowCb = document.getElementById('use-current-time');
+    if (useNowCb) { useNowCb.checked = false; Sidebar.state.useNow = false; }
 
     // Sync condition sliders if present
     const syncSlider = (id, valId, val, fmt) => {

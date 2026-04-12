@@ -29,6 +29,8 @@ const Api = (() => {
     clearOverrides: ()                 => del('/manual-override'),
     getGraphStats:  ()                 => get('/graph/stats'),
     getGraphBbox:   ()                 => get('/graph/bbox'),
+    getGraphNodes:  ()                 => get('/graph/nodes'),
+    getEdgeNames:   (edgeIds)          => post('/graph/edge-names', { edge_ids: edgeIds }),
     getEvents:      (date)             => get(`/events/${date}`),
     health:         ()                 => get('/health'),
   };

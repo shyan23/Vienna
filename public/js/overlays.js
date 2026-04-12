@@ -125,12 +125,15 @@ const Overlays = (() => {
     map = leafletMap;
     buildLayers();
 
-    document.getElementById('overlay-controls').addEventListener('click', (ev) => {
-      const btn = ev.target.closest('[data-overlay]');
-      if (!btn) return;
-      const key = btn.dataset.overlay;
-      toggle(key, btn);
-    });
+    const controls = document.getElementById('overlay-controls');
+    if (controls) {
+      controls.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('[data-overlay]');
+        if (!btn) return;
+        const key = btn.dataset.overlay;
+        toggle(key, btn);
+      });
+    }
   }
 
   function toggle(key, btn) {

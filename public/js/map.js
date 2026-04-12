@@ -99,6 +99,7 @@ const MapManager = (() => {
 
   function drawRoutes(results) {
     clearRoutes();
+    showRouteLegend(results);
     const sorted = Object.entries(results).filter(([, r]) => r && r.path_coords && r.path_coords.length > 1);
     // Draw each with a small stagger for a nice reveal effect
     sorted.forEach(([key, r], i) => {
@@ -158,6 +159,91 @@ const MapManager = (() => {
     );
   }
 
+  // ── Route legend on the map ──────────────────────────────────────────
+  let legendControl = null;
+
+  function showRouteLegend(results) {
+    if (legendControl) { map.removeControl(legendControl); legendControl = null; }
+    const valid = Object.entries(results).filter(([, r]) => r && r.path_coords && r.path_coords.length > 1);
+    if (valid.length === 0) return;
+
+    const ALGO_LABELS = {
+      bfs: 'BFS', dfs: 'DFS', ucs: 'Uniform-Cost', dijkstra: 'Dijkstra',
+      greedy: 'Greedy', astar: 'A*', weighted_astar: 'Weighted A*',
+      bidirectional_astar: 'Bidirectional A*',
+    };
+
+    legendControl = L.control({ position: 'topright' });
+    legendControl.onAdd = function () {
+      const div = L.DomUtil.create('div', 'route-legend');
+      const title = document.createElement('div');
+      title.className = 'legend-title';
+      title.textContent = 'Routes';
+      div.appendChild(title);
+
+      for (const [key] of valid) {
+        const color = ALGO_COLORS[key] || '#6ea8fe';
+        const label = ALGO_LABELS[key] || key;
+        const item = document.createElement('div');
+        item.className = 'legend-item';
+        item.dataset.key = key;
+
+        const swatch = document.createElement('span');
+        swatch.className = 'legend-swatch';
+        swatch.style.background = color;
+        const lbl = document.createElement('span');
+        lbl.className = 'legend-label';
+        lbl.textContent = label;
+
+        item.appendChild(swatch);
+        item.appendChild(lbl);
+        item.addEventListener('click', () => selectRoute(key));
+        div.appendChild(item);
+      }
+      return div;
+    };
+    legendControl.addTo(map);
+  }
+
+  // ── Blocked / congested road markers ──────────────────────────────────
+  let blockedLayers = [];
+
+  function drawBlockedRoads(overrides, graphNodes) {
+    // overrides = [{ edge_id: "from_to", intensity: 100 }, ...]
+    // graphNodes = { nodeId: { lat, lon }, ... }
+    clearBlockedRoads();
+    if (!overrides || !graphNodes) return;
+
+    for (const ov of overrides) {
+      const [fromId, toId] = ov.edge_id.split('_');
+      const fromNode = graphNodes[fromId];
+      const toNode   = graphNodes[toId];
+      if (!fromNode || !toNode) continue;
+
+      const blocked = ov.intensity >= 95;
+      const color   = blocked ? '#ff2222' : '#ff8800';  // red = blocked, orange = congested
+      const label   = blocked ? '🚫 Blocked' : '⚠️ Heavy traffic';
+
+      const line = L.polyline(
+        [[fromNode.lat, fromNode.lon], [toNode.lat, toNode.lon]],
+        {
+          color,
+          weight: 6,
+          opacity: 0.9,
+          dashArray: blocked ? '8 6' : '4 4',
+          className: 'blocked-road',
+        }
+      ).addTo(map);
+      line.bindTooltip(label, { permanent: false, direction: 'top' });
+      blockedLayers.push(line);
+    }
+  }
+
+  function clearBlockedRoads() {
+    for (const l of blockedLayers) map.removeLayer(l);
+    blockedLayers = [];
+  }
+
   function onStart(fn)         { onStartChange   = fn; }
   function onGoal(fn)          { onGoalChange    = fn; }
   function onPendingChange(fn) { getPendingChange = fn; }
@@ -166,6 +252,7 @@ const MapManager = (() => {
   return {
     init, setStartMarker, setGoalMarker, clearMarkers,
     drawRoutes, selectRoute, clearRoutes, drawGraphBbox,
+    drawBlockedRoads, clearBlockedRoads,
     onStart, onGoal, onPendingChange, getMap, ALGO_COLORS,
   };
 })();

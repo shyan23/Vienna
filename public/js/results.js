@@ -81,7 +81,6 @@ const Results = (() => {
         el('td', { text: r.error ? '—' : fmtSeconds(r.estimated_time_s) }),
         el('td', { cls: 'col-nodes', text: r.error ? '—' : String(r.nodes_expanded ?? '—') }),
         el('td', { cls: 'col-compute', text: r.error ? '—' : fmtMs(r.compute_time_ms) }),
-        el('td', { text: r.error ? 'err' : fmtGap(r.optimality_gap_pct) }),
       ]);
       if (r.error) row.classList.add('error-row');
       if (selectedKey === key) row.classList.add('selected');
