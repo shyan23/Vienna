@@ -1,66 +1,32 @@
-/* presets.js — scenario buttons that bulk-patch the sidebar state */
+/* presets.js — scenario buttons that apply traffic overrides + weather state */
 const Presets = (() => {
   const PRESETS = [
     {
       id: 'marathon', icon: '🏃‍♂', name: 'Vienna Marathon',
-      desc: 'Early April Sunday — Ringstraße closed',
-      patch: {
-        date: '2026-04-12', hour: 9, minute: 0, day_of_week: 0, month: 4,
-        vehicle: 'car', profile: 'fastest', weather: 'clear',
-      },
+      desc: 'Ringstraße fully closed — all Ring roads blocked',
+      patch: { weather: 'clear', vehicle: 'car' },
+      // Block all Ringstraße edges (resolved at activation time)
+      trafficAction: 'marathon',
     },
     {
       id: 'blizzard', icon: '❄', name: 'Blizzard',
-      desc: 'Winter storm — reduced visibility',
-      patch: {
-        date: '2026-01-15', hour: 8, minute: 0, day_of_week: 4, month: 1,
-        vehicle: 'car', profile: 'safest', weather: 'heavy_snow',
-        temperature: -5, humidity: 90, visibility_m: 300, wind_speed: 18,
-      },
+      desc: 'Winter storm — 2 random roads blocked',
+      patch: { weather: 'heavy_snow', vehicle: 'car' },
+      trafficAction: 'blizzard',
     },
     {
-      id: 'christmas', icon: '🎄', name: 'Christmas market',
-      desc: 'December evening — centre jammed',
-      patch: {
-        date: '2026-12-10', hour: 19, minute: 0, day_of_week: 4, month: 12,
-        vehicle: 'car', profile: 'fastest', weather: 'cloudy',
-        temperature: 2, humidity: 75,
-      },
+      id: 'christmas', icon: '🎄', name: 'Christmas Market',
+      desc: 'December evening — heavy traffic on 2 central roads',
+      patch: { weather: 'cloudy', vehicle: 'car' },
+      trafficAction: 'christmas',
     },
-    {
-      id: 'bike_rain', icon: '🚴', name: 'Bike in rain',
-      desc: 'Commute on a wet morning',
-      patch: {
-        hour: 8, minute: 15,
-        vehicle: 'bicycle', profile: 'safest', weather: 'rain',
-        temperature: 10, humidity: 88, visibility_m: 2000,
-      },
-    },
-    {
-      id: 'heuriger', icon: '🍷', name: 'Heuriger evening',
-      desc: 'Grinzing wine-tavern trip',
-      patch: {
-        date: '2026-09-12', hour: 19, minute: 0, day_of_week: 6, month: 9,
-        vehicle: 'taxi', profile: 'fastest', weather: 'clear', temperature: 18,
-      },
-    },
-    {
-      id: 'late_walk', icon: '🌙', name: 'Late-night walk',
-      desc: 'Safest walking after midnight',
-      patch: {
-        hour: 1, minute: 30,
-        vehicle: 'walking', profile: 'safest', weather: 'clear',
-        temperature: 12, humidity: 70,
-      },
-    },
-    {
-      id: 'donauinsel', icon: '🎪', name: 'Donauinselfest',
-      desc: 'June festival — crowded riverbanks',
-      patch: {
-        date: '2026-06-26', hour: 18, minute: 0, day_of_week: 5, month: 6,
-        vehicle: 'metro', profile: 'fastest', weather: 'clear', temperature: 26,
-      },
-    },
+  ];
+
+  // Ring road street names (marathon blocks all of these)
+  const RING_NAMES = [
+    'Schottenring', 'Universitätsring', 'Kärntner Ring',
+    'Opernring', 'Schubertring', 'Burgring', 'Parkring',
+    'Franz-Josefs-Kai',
   ];
 
   function applyPatch(patch) {
@@ -69,69 +35,113 @@ const Presets = (() => {
         const selGroupId = k === 'vehicle' ? 'vehicle-selector' : 'weather-selector';
         const group = document.getElementById(selGroupId);
         if (group) {
-          group.querySelectorAll(`[data-${k}]`).forEach(b => b.classList.remove('active'));
-          const target = group.querySelector(`[data-${k}="${v}"]`);
+          group.querySelectorAll('[data-' + k + ']').forEach(function (b) { b.classList.remove('active'); });
+          var target = group.querySelector('[data-' + k + '="' + v + '"]');
           if (target) target.classList.add('active');
         }
       }
       Sidebar.state[k] = v;
     }
-    // Re-sync visible date/time inputs (if they exist — Date & Time panel may be removed)
-    const dateInput = document.getElementById('input-date');
-    const timeInput = document.getElementById('input-time');
-    const hourSlider = document.getElementById('hour-slider');
-    if (dateInput && patch.date) dateInput.value = patch.date;
-    if (timeInput && patch.hour != null) {
-      timeInput.value = `${String(patch.hour).padStart(2,'0')}:${String(patch.minute||0).padStart(2,'0')}`;
-      if (hourSlider) hourSlider.value = patch.hour;
-    }
-    const label = document.getElementById('time-label');
-    if (label) {
-      const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][Sidebar.state.day_of_week];
-      label.textContent =
-        `${String(Sidebar.state.hour).padStart(2,'0')}:${String(Sidebar.state.minute).padStart(2,'0')} · ${dow}`;
-    }
-    const useNowCb = document.getElementById('use-current-time');
-    if (useNowCb) { useNowCb.checked = false; Sidebar.state.useNow = false; }
-
-    // Sync condition sliders if present
-    const syncSlider = (id, valId, val, fmt) => {
-      if (val == null) return;
-      const s = document.getElementById(id);
-      const l = document.getElementById(valId);
-      if (s) s.value = val;
-      if (l) l.textContent = fmt(val);
-    };
-    syncSlider('temp-slider','temp-val', patch.temperature,   v => `${v}°C`);
-    syncSlider('humidity-slider','humidity-val', patch.humidity, v => `${v}%`);
-    syncSlider('visibility-slider','visibility-val', patch.visibility_m, v => `${(v/1000).toFixed(1)} km`);
-    syncSlider('wind-slider','wind-val', patch.wind_speed, v => `${v} m/s`);
   }
 
   function el(tag, opts, children) {
-    const e = document.createElement(tag);
+    var e = document.createElement(tag);
     if (opts) {
-      if (opts.cls)  e.className = opts.cls;
+      if (opts.cls) e.className = opts.cls;
       if (opts.text !== undefined) e.textContent = opts.text;
     }
-    if (children) for (const c of children) e.appendChild(c);
+    if (children) for (var i = 0; i < children.length; i++) e.appendChild(children[i]);
     return e;
   }
 
+  async function activateScenario(preset) {
+    // 1. Clear previous overrides
+    await Api.clearOverrides();
+
+    // 2. Apply sidebar state (weather, vehicle)
+    applyPatch(preset.patch);
+
+    // 3. Apply traffic overrides based on scenario type
+    var overrides = [];
+
+    if (preset.trafficAction === 'marathon') {
+      // Fetch all ring road edges from the backend and block them
+      overrides = await getEdgesByStreetName(RING_NAMES, 100);
+    } else if (preset.trafficAction === 'blizzard') {
+      // Block 2 random roads from last results (or random graph edges)
+      overrides = await getRandomOverrides(2, 100);
+    } else if (preset.trafficAction === 'christmas') {
+      // Heavy traffic on 2 random central roads
+      overrides = await getRandomOverrides(2, 85);
+    }
+
+    // 4. Send overrides to the server
+    for (var i = 0; i < overrides.length; i++) {
+      await Api.setOverride(overrides[i].edge_id, overrides[i].intensity);
+    }
+
+    // 5. Notify app.js about the overrides so the info panel and map update
+    if (window.__onScenarioApplied) {
+      window.__onScenarioApplied(overrides, preset);
+    }
+  }
+
+  async function getEdgesByStreetName(streetNames, intensity) {
+    // Fetch from a new API endpoint that returns edge_ids by street name
+    var result = [];
+    try {
+      var data = await Api.getEdgesByName(streetNames);
+      for (var i = 0; i < data.length; i++) {
+        result.push({ edge_id: data[i], intensity: intensity });
+      }
+    } catch (e) {
+      console.warn('Failed to fetch ring edges:', e);
+    }
+    return result;
+  }
+
+  function getRandomOverrides(count, intensity) {
+    var results = window.__lastResults || {};
+    var allPaths = [];
+    var entries = Object.values(results);
+    for (var i = 0; i < entries.length; i++) {
+      var r = entries[i];
+      if (r && r.path_node_ids && r.path_node_ids.length > 1) {
+        allPaths.push(r.path_node_ids);
+      }
+    }
+    var overrides = [];
+    if (allPaths.length === 0) return overrides;
+    var used = {};
+    for (var j = 0; j < count; j++) {
+      var path = allPaths[Math.floor(Math.random() * allPaths.length)];
+      var idx = Math.floor(Math.random() * (path.length - 1));
+      var eid = path[idx] + '_' + path[idx + 1];
+      if (!used[eid]) {
+        used[eid] = true;
+        overrides.push({ edge_id: eid, intensity: intensity });
+        // Also reverse direction
+        var rev = path[idx + 1] + '_' + path[idx];
+        overrides.push({ edge_id: rev, intensity: intensity });
+      }
+    }
+    return overrides;
+  }
+
   function render() {
-    const host = document.getElementById('preset-grid');
+    var host = document.getElementById('preset-grid');
     while (host.firstChild) host.removeChild(host.firstChild);
-    PRESETS.forEach(p => {
-      const iconEl = el('span', { cls: 'preset-icon', text: p.icon });
-      const nameEl = el('div', { text: p.name });
-      const descEl = el('div', { cls: 'muted small', text: p.desc });
-      const btn = el('button', { cls: 'preset-btn' }, [iconEl, nameEl, descEl]);
-      btn.addEventListener('click', () => applyPatch(p.patch));
+    PRESETS.forEach(function (p) {
+      var iconEl = el('span', { cls: 'preset-icon', text: p.icon });
+      var nameEl = el('div', { text: p.name });
+      var descEl = el('div', { cls: 'muted small', text: p.desc });
+      var btn = el('button', { cls: 'preset-btn' }, [iconEl, nameEl, descEl]);
+      btn.addEventListener('click', function () { activateScenario(p); });
       host.appendChild(btn);
     });
   }
 
   function init() { render(); }
 
-  return { init, PRESETS, applyPatch };
+  return { init, PRESETS, activateScenario };
 })();

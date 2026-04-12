@@ -399,6 +399,30 @@
     });
   }
 
+  // ── Scenario callback (called by presets.js after activating a scenario) ──
+  window.__onScenarioApplied = async function (overrides, preset) {
+    // Store overrides so they persist and show in info panel
+    boostHistory = overrides.slice();
+    weatherOverrides = [];
+    // Draw blocked roads on map
+    if (graphNodesCache) {
+      MapManager.clearBlockedRoads();
+      MapManager.drawBlockedRoads(overrides, graphNodesCache);
+    }
+    // Update the sidebar info panel with street names
+    await updateTrafficInfoPanel();
+    // Tell user to find routes
+    const name = preset ? preset.name : 'Scenario';
+    const blocked = overrides.filter(function (o) { return o.intensity >= 95; }).length;
+    const heavy = overrides.filter(function (o) { return o.intensity < 95; }).length;
+    let msg = '🎬 ' + name + ' active — ';
+    if (blocked > 0) msg += blocked + ' road(s) blocked';
+    if (blocked > 0 && heavy > 0) msg += ', ';
+    if (heavy > 0) msg += heavy + ' road(s) heavy traffic';
+    msg += '. Click Find Routes to see the impact.';
+    Results.setSummary(msg);
+  };
+
   function init() {
     Sidebar.init();
     const map = MapManager.init('map', { center: VIENNA_CENTER, zoom: 13 });
@@ -443,7 +467,8 @@
     document.getElementById('btn-find-routes').addEventListener('click', onFindRoutes);
     document.getElementById('btn-clear').addEventListener('click', onClear);
     document.getElementById('weather-badge').addEventListener('click', () => refreshWeather());
-    document.getElementById('auto-weather-btn').addEventListener('click', () => refreshWeather());
+    const autoWeatherBtn = document.getElementById('auto-weather-btn');
+    if (autoWeatherBtn) autoWeatherBtn.addEventListener('click', () => refreshWeather());
     document.getElementById('btn-export-json').addEventListener('click', () => {
       const blob = new Blob([JSON.stringify(window.__lastResults || {}, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);

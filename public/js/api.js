@@ -31,6 +31,7 @@ const Api = (() => {
     getGraphBbox:   ()                 => get('/graph/bbox'),
     getGraphNodes:  ()                 => get('/graph/nodes'),
     getEdgeNames:   (edgeIds)          => post('/graph/edge-names', { edge_ids: edgeIds }),
+    getEdgesByName: (names)            => post('/graph/edges-by-name', { names: names }),
     getEvents:      (date)             => get(`/events/${date}`),
     health:         ()                 => get('/health'),
   };

@@ -171,6 +171,25 @@ async def graph_bbox():
     return {"bbox": g["meta"]["bbox"]}
 
 
+@router.post("/graph/edges-by-name")
+async def edges_by_name(body: dict):
+    """Return all edge_ids whose street name matches any in the given list."""
+    from src.graph.loader import load_graph
+
+    g = load_graph()
+    street_names = set(body.get("names", []))
+    result = []
+    seen = set()
+    for edge in g["edges"]:
+        name = edge.get("name", "")
+        if name in street_names:
+            eid = f'{edge["from"]}_{edge["to"]}'
+            if eid not in seen:
+                seen.add(eid)
+                result.append(eid)
+    return result
+
+
 @router.post("/graph/edge-names")
 async def edge_names(body: dict):
     """Look up street names for a list of edge_id strings (e.g. '123_456')."""
