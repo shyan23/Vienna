@@ -47,13 +47,24 @@ def get_edge_cost(graph: dict, edge_idx: int) -> float:
     return graph["edges"][edge_idx]["distance_m"]
 
 
+def is_edge_blocked(
+    graph: dict, edge_idx: int, overrides_map: dict[str, int] | None = None
+) -> bool:
+    """Return True if the edge is blocked (intensity >= 95)."""
+    if not overrides_map:
+        return False
+    edge = graph["edges"][edge_idx]
+    edge_key = f'{edge["from"]}_{edge["to"]}'
+    return overrides_map.get(edge_key, 0) >= 95
+
+
 def get_effective_edge_cost(
     graph: dict, edge_idx: int, overrides_map: dict[str, int] | None = None
 ) -> float:
     """Edge cost with manual traffic overrides applied.
 
-    intensity 0..100 → multiplier 0.5..3.0 (same formula as manual_adjustment.py).
-    If no override exists for this edge, returns raw distance_m.
+    Blocked edges (intensity >= 95) return infinity — they are impassable.
+    Sub-blocked edges: intensity 0..94 → multiplier 0.5..2.85.
     """
     edge = graph["edges"][edge_idx]
     base = edge["distance_m"]
@@ -63,6 +74,9 @@ def get_effective_edge_cost(
     if edge_key not in overrides_map:
         return base
     intensity = overrides_map[edge_key]
+    if intensity >= 95:
+        return float("inf")
+    # 0 = free flowing (bonus), 94 = severe penalty
     multiplier = 0.5 + (intensity / 100.0) * 2.5
     return base * multiplier
 

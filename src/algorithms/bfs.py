@@ -11,11 +11,14 @@ from src.algorithms.base import (
     reconstruct_path,
     sum_path_distance,
 )
-from src.graph.loader import get_neighbors
+from src.graph.loader import get_neighbors, is_edge_blocked
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathResult:
     t0 = time.perf_counter()
+    params = params or {}
+    overrides = params.get("manual_overrides_map")
+
     if start_id == goal_id:
         return PathResult(
             algorithm="bfs",
@@ -50,7 +53,7 @@ def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathR
 
         for nb in get_neighbors(graph, current):
             nid = nb["node"]
-            if nid not in prev:
+            if nid not in prev and not is_edge_blocked(graph, nb["edge_idx"], overrides):
                 prev[nid] = current
                 queue.append(nid)
 

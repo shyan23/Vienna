@@ -17,7 +17,7 @@ from src.algorithms.base import (
     coords_for_path,
     sum_path_distance,
 )
-from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors
+from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors, is_edge_blocked
 
 
 def _reverse_adjacency(graph: dict, node_id: str) -> list[dict]:
@@ -94,6 +94,8 @@ def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult
                 nid = nb["node"]
                 if nid in closed_f:
                     continue
+                if is_edge_blocked(graph, nb["edge_idx"], overrides):
+                    continue
                 tentative = g_f[current] + get_effective_edge_cost(graph, nb["edge_idx"], overrides)
                 if tentative < g_f.get(nid, float("inf")):
                     g_f[nid] = tentative
@@ -115,6 +117,8 @@ def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult
             for nb in _reverse_adjacency(graph, current):
                 nid = nb["node"]
                 if nid in closed_b:
+                    continue
+                if is_edge_blocked(graph, nb["edge_idx"], overrides):
                     continue
                 tentative = g_b[current] + get_effective_edge_cost(graph, nb["edge_idx"], overrides)
                 if tentative < g_b.get(nid, float("inf")):

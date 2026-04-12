@@ -12,12 +12,13 @@ from src.algorithms.base import (
     reconstruct_path,
     sum_path_distance,
 )
-from src.graph.loader import get_neighbors
+from src.graph.loader import get_neighbors, is_edge_blocked
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult:
     t0 = time.perf_counter()
     params = params or {}
+    overrides = params.get("manual_overrides_map")
 
     tiebreak = itertools.count()
     h0 = heuristic_fn(start_id, goal_id, graph, params)
@@ -49,6 +50,8 @@ def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult
         for nb in get_neighbors(graph, current):
             nid = nb["node"]
             if nid in visited or nid in prev:
+                continue
+            if is_edge_blocked(graph, nb["edge_idx"], overrides):
                 continue
             prev[nid] = current
             h = heuristic_fn(nid, goal_id, graph, params)

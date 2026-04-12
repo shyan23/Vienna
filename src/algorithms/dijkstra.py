@@ -12,7 +12,7 @@ from src.algorithms.base import (
     reconstruct_path,
     sum_path_distance,
 )
-from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors
+from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors, is_edge_blocked
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathResult:
@@ -50,6 +50,8 @@ def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathR
         for nb in get_neighbors(graph, current):
             nid = nb["node"]
             if nid in visited:
+                continue
+            if is_edge_blocked(graph, nb["edge_idx"], overrides):
                 continue
             new_dist = g + get_effective_edge_cost(graph, nb["edge_idx"], overrides)
             if new_dist < dist.get(nid, float("inf")):

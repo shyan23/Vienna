@@ -935,7 +935,15 @@ body.advanced-mode .advanced-only { display: block; }
   color: var(--text-dim);
   white-space: pre-line;
 }
-.blocked-road { pointer-events: none; }
+.blocked-tooltip {
+  background: rgba(20, 0, 0, 0.9);
+  border: 1px solid #ff4444;
+  color: #fff;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
 
 /* ===== L. Route legend on map ===== */
 .route-legend {

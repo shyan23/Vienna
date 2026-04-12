@@ -214,27 +214,46 @@ const MapManager = (() => {
     clearBlockedRoads();
     if (!overrides || !graphNodes) return;
 
+    // Deduplicate: keep highest intensity per edge
+    const byEdge = {};
     for (const ov of overrides) {
+      if (!byEdge[ov.edge_id] || ov.intensity > byEdge[ov.edge_id].intensity) {
+        byEdge[ov.edge_id] = ov;
+      }
+    }
+
+    for (const ov of Object.values(byEdge)) {
       const [fromId, toId] = ov.edge_id.split('_');
       const fromNode = graphNodes[fromId];
       const toNode   = graphNodes[toId];
       if (!fromNode || !toNode) continue;
 
+      const coords = [[fromNode.lat, fromNode.lon], [toNode.lat, toNode.lon]];
       const blocked = ov.intensity >= 95;
-      const color   = blocked ? '#ff2222' : '#ff8800';  // red = blocked, orange = congested
-      const label   = blocked ? '🚫 Blocked' : '⚠️ Heavy traffic';
+      const color   = blocked ? '#ff2222' : '#ff8800';
 
-      const line = L.polyline(
-        [[fromNode.lat, fromNode.lon], [toNode.lat, toNode.lon]],
-        {
-          color,
-          weight: 6,
-          opacity: 0.9,
-          dashArray: blocked ? '8 6' : '4 4',
-          className: 'blocked-road',
-        }
-      ).addTo(map);
-      line.bindTooltip(label, { permanent: false, direction: 'top' });
+      // Glow layer (wider, translucent background)
+      const glow = L.polyline(coords, {
+        color,
+        weight: blocked ? 14 : 10,
+        opacity: 0.3,
+        lineCap: 'round',
+        lineJoin: 'round',
+        interactive: false,
+      }).addTo(map);
+      blockedLayers.push(glow);
+
+      // Main line (solid, bright)
+      const line = L.polyline(coords, {
+        color,
+        weight: blocked ? 7 : 5,
+        opacity: 0.95,
+        dashArray: blocked ? '10 6' : '6 4',
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(map);
+      const label = blocked ? '🚫 Blocked' : '⚠️ Heavy traffic';
+      line.bindTooltip(label, { sticky: true, direction: 'top', className: 'blocked-tooltip' });
       blockedLayers.push(line);
     }
   }
