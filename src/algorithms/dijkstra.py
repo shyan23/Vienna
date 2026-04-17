@@ -12,13 +12,14 @@ from src.algorithms.base import (
     reconstruct_path,
     sum_path_distance,
 )
-from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors, is_edge_blocked
+from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors, is_edge_blocked, is_edge_passable
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathResult:
     t0 = time.perf_counter()
     params = params or {}
     overrides = params.get("manual_overrides_map")
+    vehicle = params.get("vehicle_type")
 
     tiebreak = itertools.count()
     heap: list[tuple[float, int, str]] = [(0.0, next(tiebreak), start_id)]
@@ -51,7 +52,7 @@ def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathR
             nid = nb["node"]
             if nid in visited:
                 continue
-            if is_edge_blocked(graph, nb["edge_idx"], overrides):
+            if is_edge_blocked(graph, nb["edge_idx"], overrides) or not is_edge_passable(graph, nb["edge_idx"], vehicle):
                 continue
             new_dist = g + get_effective_edge_cost(graph, nb["edge_idx"], overrides)
             if new_dist < dist.get(nid, float("inf")):

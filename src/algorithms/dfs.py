@@ -10,13 +10,14 @@ from src.algorithms.base import (
     reconstruct_path,
     sum_path_distance,
 )
-from src.graph.loader import get_neighbors, is_edge_blocked
+from src.graph.loader import get_neighbors, is_edge_blocked, is_edge_passable
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathResult:
     t0 = time.perf_counter()
     params = params or {}
     overrides = params.get("manual_overrides_map")
+    vehicle = params.get("vehicle_type")
 
     # prev[node] = parent — tracks visited nodes and allows path reconstruction
     prev: dict[str, str | None] = {start_id: None}
@@ -42,7 +43,7 @@ def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathR
 
         for nb in get_neighbors(graph, current):
             nid = nb["node"]
-            if nid not in prev and not is_edge_blocked(graph, nb["edge_idx"], overrides):
+            if nid not in prev and not is_edge_blocked(graph, nb["edge_idx"], overrides) and is_edge_passable(graph, nb["edge_idx"], vehicle):
                 prev[nid] = current
                 stack.append(nid)
 

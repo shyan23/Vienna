@@ -81,6 +81,49 @@ def get_effective_edge_cost(
     return base * multiplier
 
 
+# ── Vehicle passability ─────────────────────────────────────────────────
+# Which road types each vehicle can traverse.
+# metro/train have NO roads in the graph → always impassable.
+
+_MOTOR_ROADS = {
+    "residential", "secondary", "tertiary", "primary", "living_street",
+    "secondary_link", "unclassified", "busway",
+}
+_WALK_ROADS = {
+    "footway", "residential", "corridor", "steps", "pedestrian",
+    "living_street", "path", "platform", "secondary", "tertiary",
+    "primary", "secondary_link", "unclassified", "cycleway",
+}
+_CYCLE_ROADS = {
+    "cycleway", "residential", "secondary", "tertiary", "primary",
+    "living_street", "secondary_link", "unclassified", "path",
+}
+
+# Vehicles with no infrastructure in the road graph
+_NO_ROAD_VEHICLES = {"metro", "train"}
+
+
+def is_edge_passable(graph: dict, edge_idx: int, vehicle: str | None) -> bool:
+    """Return True if the given vehicle type can traverse this edge."""
+    if not vehicle:
+        return True
+    if vehicle in _NO_ROAD_VEHICLES:
+        return False
+    edge = graph["edges"][edge_idx]
+    road_type = edge.get("road_type", "")
+    if vehicle in ("car", "taxi", "motorcycle", "truck"):
+        return road_type in _MOTOR_ROADS
+    if vehicle == "bus":
+        return edge.get("bus_route", False) or road_type in _MOTOR_ROADS
+    if vehicle in ("bicycle", "escooter"):
+        return road_type in _CYCLE_ROADS
+    if vehicle == "walking":
+        return road_type in _WALK_ROADS
+    if vehicle == "tram":
+        return bool(edge.get("tram_track", False))
+    return True  # unknown vehicle → allow all
+
+
 def nearest_node(graph: dict, lat: float, lon: float) -> str:
     """Find the graph node closest to a lat/lon coordinate."""
     from src.graph.builder import haversine

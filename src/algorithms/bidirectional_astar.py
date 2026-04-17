@@ -22,17 +22,23 @@ from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbo
 
 def _reverse_adjacency(graph: dict, node_id: str) -> list[dict]:
     """
-    Backward-search neighbours: since the graph's `adjacency` is a forward
-    adjacency list (u -> v with edge_idx pointing to edges[u->v]), we need the
-    inverse for the goal-rooted search. We return pseudo-neighbours with the
-    forward edge's cost as the backward cost — which is correct under symmetric
-    edge weights (distance_m is symmetric).
+    Backward-search neighbours of `node_id`: nodes `p` such that an edge
+    `p -> node_id` exists in the graph. For each such predecessor we return
+    the edge_idx of that forward edge (`p -> node_id`), because that is the
+    edge the stitched path will actually traverse — so block checks and
+    cost lookups must reference it, not the `node_id -> p` sibling.
 
-    Because non-oneway ways already emit a reverse edge in builder.py, the
-    forward adjacency of v will contain u for bidirectional streets. So we can
-    simply reuse get_neighbors(graph, node_id).
+    Strictly oneway streets without a reverse edge are correctly excluded:
+    if no edge `p -> node_id` exists in `adjacency[p]`, we skip `p`.
     """
-    return get_neighbors(graph, node_id)
+    result: list[dict] = []
+    for sibling in get_neighbors(graph, node_id):
+        p = sibling["node"]
+        for nb in get_neighbors(graph, p):
+            if nb["node"] == node_id:
+                result.append({"node": p, "edge_idx": nb["edge_idx"]})
+                break
+    return result
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult:
