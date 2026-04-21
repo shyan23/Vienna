@@ -43,6 +43,7 @@ from src.heuristics.markets import get_market_multiplier
 from src.heuristics.nightnetwork import get_nightnetwork_multiplier
 from src.heuristics.parking import get_parking_multiplier
 from src.heuristics.pedestrian_density import get_pedestrian_multiplier
+from src.heuristics.road_quality import get_road_quality_multiplier
 from src.heuristics.road_works import get_road_works_multiplier
 from src.heuristics.safety import get_safety_multiplier
 from src.heuristics.scenic import get_scenic_multiplier
@@ -68,7 +69,7 @@ ALL_HEURISTIC_IDS = {
     "commuter_bridges", "markets", "heuriger", "season",
     "lane_capacity", "road_works", "humidity", "visibility",
     "pedestrian_density", "delivery", "nightnetwork",
-    "manual_adjustment",
+    "manual_adjustment", "road_quality",
 }
 
 
@@ -192,6 +193,8 @@ def make_heuristic(params: dict) -> Callable:
                     e_mult *= get_school_multiplier(edge, hour, minute, day_of_week)
                 if _enabled(enabled, "scenic"):
                     e_mult *= get_scenic_multiplier(edge, profile)
+                if _enabled(enabled, "road_quality"):
+                    e_mult *= get_road_quality_multiplier(edge, vehicle)
                 if _enabled(enabled, "manual_adjustment"):
                     edge_key = f"{edge['from']}_{edge['to']}"
                     e_mult *= get_manual_multiplier(edge_key, overrides)

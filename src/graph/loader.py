@@ -59,26 +59,35 @@ def is_edge_blocked(
 
 
 def get_effective_edge_cost(
-    graph: dict, edge_idx: int, overrides_map: dict[str, int] | None = None
+    graph: dict,
+    edge_idx: int,
+    overrides_map: dict[str, int] | None = None,
+    params: dict | None = None,
 ) -> float:
-    """Edge cost with manual traffic overrides applied.
+    """Edge cost with manual traffic overrides + road-quality multiplier applied.
 
-    Blocked edges (intensity >= 95) return infinity — they are impassable.
-    Sub-blocked edges: intensity 0..94 → multiplier 0.5..2.85.
+    Blocked edges (intensity >= 95) return infinity — impassable.
+    Sub-blocked: intensity 0..94 → override multiplier 0.5..2.85.
+    Road quality (positive heuristic): primary/secondary arterials get <1,
+    rough surfaces / footways get >1, making g(n) time-equivalent.
     """
     edge = graph["edges"][edge_idx]
     base = edge["distance_m"]
-    if not overrides_map:
-        return base
-    edge_key = f'{edge["from"]}_{edge["to"]}'
-    if edge_key not in overrides_map:
-        return base
-    intensity = overrides_map[edge_key]
-    if intensity >= 95:
-        return float("inf")
-    # 0 = free flowing (bonus), 94 = severe penalty
-    multiplier = 0.5 + (intensity / 100.0) * 2.5
-    return base * multiplier
+    cost = base
+
+    if overrides_map:
+        edge_key = f'{edge["from"]}_{edge["to"]}'
+        if edge_key in overrides_map:
+            intensity = overrides_map[edge_key]
+            if intensity >= 95:
+                return float("inf")
+            cost *= 0.5 + (intensity / 100.0) * 2.5
+
+    if params is not None and params.get("use_road_quality", True):
+        from src.heuristics.road_quality import get_road_quality_multiplier
+        cost *= get_road_quality_multiplier(edge, params.get("vehicle_type"))
+
+    return cost
 
 
 # ── Vehicle passability ─────────────────────────────────────────────────

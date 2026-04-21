@@ -52,7 +52,7 @@ def find_path(graph, start_id, goal_id, heuristic_fn=None, params=None) -> PathR
             nid = nb["node"]
             if is_edge_blocked(graph, nb["edge_idx"], overrides) or not is_edge_passable(graph, nb["edge_idx"], vehicle):
                 continue
-            new_dist = g + get_effective_edge_cost(graph, nb["edge_idx"], overrides)
+            new_dist = g + get_effective_edge_cost(graph, nb["edge_idx"], overrides, params)
             if new_dist < dist.get(nid, float("inf")):
                 dist[nid] = new_dist
                 prev[nid] = current

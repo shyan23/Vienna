@@ -12,7 +12,7 @@ from src.algorithms.base import (
     reconstruct_path,
     sum_path_distance,
 )
-from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors, is_edge_blocked
+from src.graph.loader import get_edge_cost, get_effective_edge_cost, get_neighbors, is_edge_blocked, is_edge_passable
 
 
 def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult:
@@ -20,6 +20,7 @@ def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult
     params = params or {}
     w = float(params.get("w", 1.5))
     overrides = params.get("manual_overrides_map")
+    vehicle = params.get("vehicle_type")
 
     tiebreak = itertools.count()
     h_start = heuristic_fn(start_id, goal_id, graph, params)
@@ -54,9 +55,9 @@ def find_path(graph, start_id, goal_id, heuristic_fn, params=None) -> PathResult
             nid = nb["node"]
             if nid in closed:
                 continue
-            if is_edge_blocked(graph, nb["edge_idx"], overrides):
+            if is_edge_blocked(graph, nb["edge_idx"], overrides) or not is_edge_passable(graph, nb["edge_idx"], vehicle):
                 continue
-            tentative = g_current + get_effective_edge_cost(graph, nb["edge_idx"], overrides)
+            tentative = g_current + get_effective_edge_cost(graph, nb["edge_idx"], overrides, params)
             if tentative < g_score.get(nid, float("inf")):
                 g_score[nid] = tentative
                 prev[nid] = current
