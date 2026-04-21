@@ -112,7 +112,7 @@ def make_heuristic(params: dict) -> Callable:
     static_mult = 1.0
 
     if _enabled(enabled, "weather"):
-        static_mult *= get_weather_multiplier(weather)
+        static_mult *= get_weather_multiplier(weather, vehicle)
     if _enabled(enabled, "time_of_day"):
         static_mult *= get_time_multiplier(hour, day_of_week)
     if _enabled(enabled, "vehicle_type"):

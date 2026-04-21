@@ -34,9 +34,10 @@ uvicorn src.main:app --reload --port 8000
   `data/vienna_graph.json`. Each request kicks off 8 algorithms in a
   `ThreadPoolExecutor` and returns a unified comparison response.
 - **Algorithms** — all implement the same `find_path(graph, start, goal, h_fn, params)`
-  signature and return a `PathResult` dataclass.
+  signature and return a `PathResult` dataclass. See [ALGORITHMS.md](dcoumentations/ALGORITHMS.md) for details.
 - **Heuristics** — `src/heuristics/combined.py` exposes `make_heuristic(params)`
   which composes all active sub-heuristics into a single callable `h(node, goal, graph)`.
+  Detailed logic in [COST_AND_HEURISTICS.md](dcoumentations/COST_AND_HEURISTICS.md).
 - **Frontend** — vanilla JS + Leaflet. No build step. Dark "Imperial Vienna"
   theme with gold accent, comparison table drawer, overlays, and scenario presets.
 

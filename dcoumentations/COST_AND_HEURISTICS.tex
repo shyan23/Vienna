@@ -1,0 +1,158 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{textcomp} % for extra symbols
+
+\geometry{margin=1in}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstset{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\small,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2,
+    language=Python,
+    extendedchars=true,
+    literate={ε}{{$\epsilon$}}1
+}
+
+\title{Vienna Routing: Cost and Heuristics Documentation}
+\author{Vienna Traffic Router Team}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+This document explains how distances are measured, how edge costs ($g(n)$) are calculated, and how heuristics ($h(n)$) are combined to guide search algorithms like A*.
+
+\section{Distance Calculation}
+
+All distance measurements in the Vienna project use the \textbf{Haversine Formula}. This calculates the great-circle distance between two points defined by their latitude and longitude.
+
+\subsection{Formula}
+The distance $d$ is calculated as follows:
+\begin{align*}
+a &= \sin^2\left(\frac{\Delta\phi}{2}\right) + \cos(\phi_1)\cos(\phi_2)\sin^2\left(\frac{\Delta\lambda}{2}\right) \\
+c &= 2 \cdot \operatorname{atan2}\left(\sqrt{a}, \sqrt{1-a}\right) \\
+d &= R \cdot c
+\end{align*}
+Where $R = 6,371,000$ meters.
+
+\subsection{Implementation Source}
+In \texttt{src/graph/builder.py}:
+\begin{lstlisting}
+def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6_371_000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+\end{lstlisting}
+
+\section{Edge Cost ($g(n)$)}
+
+The edge cost, or path cost from the start to the current node ($g(n)$), represents the actual weight assigned to an edge in the graph.
+
+\subsection{Effective Cost Calculation}
+\begin{enumerate}
+    \item \textbf{Manual Traffic Overrides}:
+    \begin{itemize}
+        \item \textbf{Blocked}: If intensity $\ge 95$, the edge is considered impassable ($\infty$ cost).
+        \item \textbf{Sub-blocked}: Multiplier $= 0.5 + (\text{intensity}/100.0) \cdot 2.5$.
+    \end{itemize}
+    \item \textbf{Road Quality Multiplier}:
+    Adjusted based on road type and surface.
+\end{enumerate}
+
+\subsection{Implementation Source}
+In \texttt{src/graph/loader.py} $\rightarrow$ \texttt{get\_effective\_edge\_cost()}:
+\begin{lstlisting}
+    if overrides_map:
+        edge_key = f'{edge["from"]}_{edge["to"]}'
+        if edge_key in overrides_map:
+            intensity = overrides_map[edge_key]
+            if intensity >= 95:
+                return float("inf")
+            cost *= 0.5 + (intensity / 100.0) * 2.5
+
+    if params is not None and params.get("use_road_quality", True):
+        from src.heuristics.road_quality import get_road_quality_multiplier
+        cost *= get_road_quality_multiplier(edge, params.get("vehicle_type"))
+\end{lstlisting}
+
+\section{Heuristic Cost ($h(n)$)}
+
+The heuristic cost ($h(n)$) is an estimate of the remaining cost from the current node to the goal.
+
+\subsection{Composite Multiplier}
+The final $h(n)$ is:
+\[ h(n) = \text{Haversine}(n, \text{goal}) \cdot \text{Multiplier}_{\text{Total}} \]
+
+\section{Admissibility and Capping}
+
+\subsection{Admissibility}
+A heuristic is \textbf{admissible} if it never overestimates the true cost. The \textbf{Haversine distance} is the base admissible heuristic. However, multiplying it by factors $> 1.0$ (like weather penalties) can make it \textbf{inadmissible}.
+
+\subsection{The MAX\_HEURISTIC\_CAP}
+To prevent the search from becoming purely greedy, the final heuristic is capped:
+\[ h(n)_{\text{final}} = \min(h, h_{\text{base}} \cdot \text{MAX\_HEURISTIC\_CAP}) \]
+
+The default cap is \textbf{50.0}. This ensures \textbf{bounded-suboptimality} ($\epsilon$-admissibility), meaning the resulting path is guaranteed to be within a known factor of the optimal path.
+
+\subsection{How Capping Helps}
+\begin{itemize}
+    \item \textbf{Search Focus}: Prevents $h(n)$ from ballooning and dwarfing $g(n)$.
+    \item \textbf{Greedy Prevention}: Ensures A* doesn't blindly follow low $h$ values.
+    \item \textbf{Stability}: Maintains consistent performance when multiple multipliers are stacked.
+\end{itemize}
+
+\subsection{Implementation Source}
+In \texttt{src/heuristics/combined.py}:
+\begin{lstlisting}
+MAX_HEURISTIC_CAP = float(os.getenv("MAX_HEURISTIC_CAP", "50.0"))
+# ...
+        h = h_base * mult
+        # Cap total h against arbitrary blow-up, keep epsilon-admissibility
+        return min(h, h_base * MAX_HEURISTIC_CAP)
+\end{lstlisting}
+
+\section{Distance and Time Results}
+
+\subsection{Implementation Source}
+In \texttt{src/algorithms/base.py}:
+\begin{lstlisting}
+def sum_path_distance(graph: dict, path: list[str]) -> float:
+    # ... loops through path and sums graph["edges"][edge_idx]["distance_m"] ...
+
+VEHICLE_SPEEDS = {
+    "car":        8.33,   # ~30 km/h urban
+    "motorcycle": 9.72,   # ~35 km/h
+}
+\end{lstlisting}
+
+\end{document}

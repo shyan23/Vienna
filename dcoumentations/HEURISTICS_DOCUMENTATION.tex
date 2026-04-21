@@ -1,0 +1,1362 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{fancyhdr}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  numbers=left,
+  numberstyle=\tiny,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  stringstyle=\color{red},
+  backgroundcolor=\color{lightgray!20},
+  language=Python,
+  showstringspaces=false,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Vienna Traffic Router}
+\lhead{Heuristics Documentation}
+\cfoot{\thepage}
+
+\title{\textbf{Vienna Traffic Router\\Heuristics System Documentation}}
+\author{src/heuristics/}
+\date{April 2026}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Overview}
+
+The heuristics system in \texttt{src/heuristics/} implements a sophisticated multi-dimensional cost model for the Vienna road network. It powers all eight pathfinding algorithms (BFS, DFS, UCS, Dijkstra, Greedy Best-First, A*, Weighted A*, Bidirectional A*) by providing informed estimates of distance-to-goal that account for 30+ real-world factors: weather, time of day, vehicle type, surface quality, safety, emissions, events, parking difficulty, and Vienna-specific local effects.
+
+\subsection{Core Principle}
+
+Each heuristic module returns a \textit{multiplier} $m \in \mathbb{R}^+$ that scales the raw Haversine distance:
+
+\[
+h(n, \text{goal}) = \text{haversine}(n, \text{goal}) \times \prod_{i=1}^{n} m_i
+\]
+
+The multiplier is multiplicative, not additive, so a road penalized by weather (factor 1.5), surface (factor 1.2), and elevation (factor 1.1) incurs a combined penalty of $1.5 \times 1.2 \times 1.1 = 1.98$.
+
+\subsection{Design Goals}
+
+\begin{enumerate}
+  \item \textbf{Interactivity:} Heuristics must evaluate thousands of times per route (once per frontier node in A*) with sub-millisecond latency.
+  \item \textbf{Admissibility:} Static heuristics never overestimate true cost; weighted A* remains bounded-suboptimal via a hard cap.
+  \item \textbf{Modularity:} Each heuristic is independent, testable, and can be toggled on/off via the UI without recompilation.
+  \item \textbf{Semantic clarity:} A multiplier $> 1$ increases cost (penalty); $< 1$ decreases cost (incentive).
+\end{enumerate}
+
+\newpage
+
+\section{Architecture: Two-Tier Design}
+
+The heuristics system splits computation into three evaluation tiers to optimize latency:
+
+\subsection{Tier 1: Static Multipliers}
+
+Static multipliers depend \textit{only} on request parameters (weather, time, vehicle type, etc.) and are computed \textbf{once} when the heuristic closure is built, before any pathfinding begins. Their product is baked into a single float \texttt{static\_mult}.
+
+\[
+m_{\text{static}} = m_{\text{weather}} \times m_{\text{time}} \times m_{\text{vehicle}} \times \cdots
+\]
+
+Static multipliers include:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Heuristic} & \textbf{Input} \\
+\midrule
+\texttt{weather} & Current weather condition (clear, rain, snow, etc.) \\
+\texttt{time\_of\_day} & Hour and day of week (rush-hour penalties) \\
+\texttt{vehicle\_type} & Vehicle class (car, motorcycle, bus, etc.) \\
+\texttt{visibility} & Visibility in metres (fog penalty) \\
+\texttt{humidity} & Relative humidity \% (ice risk) \\
+\texttt{nightnetwork} & Vehicle type + hour (night-time road availability) \\
+\texttt{wind} & Wind speed (m/s) and direction (vehicle-dependent) \\
+\texttt{headway} & Vehicle + hour (service frequency for transit) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Example:} For a car route at 8 AM on a rainy day:
+\begin{lstlisting}
+static_mult = 1.0
+static_mult *= get_weather_multiplier("rain")           # 1.50
+static_mult *= get_time_multiplier(hour=8, dow=1)       # 1.25 (rush hour)
+static_mult *= get_vehicle_multiplier("car")            # 1.00
+# Result: static_mult = 1.875
+\end{lstlisting}
+
+\subsection{Tier 2: Goal-Dependent Multipliers}
+
+Goal-dependent multipliers depend on the destination node (specifically its district) and are constant throughout a single route search but must be re-evaluated for each new route. They are computed inside the heuristic closure once per call, keyed by the goal district.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Heuristic} & \textbf{Input} \\
+\midrule
+\texttt{parking} & Goal district (car parking difficulty varies by district) \\
+\texttt{holiday\_historical} & Date + goal district (holiday traffic patterns) \\
+\texttt{events} & Date, hour, goal district (concert/event congestion) \\
+\texttt{fiaker} & Goal district, vehicle, hour (horse-carriage zones) \\
+\texttt{season} & Month + goal district (seasonal congestion) \\
+\texttt{pedestrian\_density} & Goal district, vehicle, hour, date (foot traffic) \\
+\texttt{delivery} & Goal district, vehicle, hour (delivery-zone restrictions) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Example:} A car route to district 1 (innerstadt) at 2 PM on a Friday:
+\begin{lstlisting}
+mult *= get_parking_multiplier(goal_district="1", vehicle="car")  # 1.60
+mult *= get_pedestrian_multiplier(goal_district="1",
+                                  vehicle="car", hour=14, date="2026-04-21")
+\end{lstlisting}
+
+\subsection{Tier 3: Node and Edge-Dependent Multipliers}
+
+Edge-dependent multipliers depend on the physical properties of roads at the frontier node (surface, elevation, lighting, etc.) and are the most expensive to compute. To keep the heuristic admissible and avoid iterating all outgoing edges, the system \textit{picks the cheapest outgoing edge as a proxy}:
+
+\[
+m_{\text{edge}} = \min_{\text{edge} \in \text{adjacency}(n)} m_{\text{surface}}(\text{edge}) \times m_{\text{elevation}}(\text{edge}) \times \cdots
+\]
+
+This ensures consistency (the heuristic never overestimates from the same node twice) while still reflecting local road quality.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Heuristic} & \textbf{Evaluated On} \\
+\midrule
+\texttt{surface} & Edge surface material (asphalt, cobblestone, gravel, etc.) \\
+\texttt{elevation} & Edge slope (flat vs.\ uphill penalty) \\
+\texttt{safety} & Edge lighting + road class (night-time safety for pedestrians) \\
+\texttt{emission\_zones} & Edge location (low-emission zones) \\
+\texttt{tram\_tracks} & Edge surface + weather (tram track penalties in rain/snow) \\
+\texttt{snow\_priority} & Edge slope + weather (snow clearance priority) \\
+\texttt{commuter\_bridges} & Edge class + time (congestion on key bridges) \\
+\texttt{lane\_capacity} & Edge lane count + vehicle (narrow lanes for trucks) \\
+\texttt{school\_zones} & Edge proximity + time (school zone speed limits) \\
+\texttt{scenic} & Edge tags + route profile (scenic routes for tourism) \\
+\texttt{road\_quality} & Edge condition flag (pothole/repair penalties) \\
+\texttt{manual\_adjustment} & Edge ID (user-applied overrides) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Node-dependent (not edge-based) multipliers include:
+\begin{itemize}
+  \item \texttt{intersection\_density}: Scans the node's adjacency to count outgoing roads (high density implies slow navigation).
+  \item \texttt{road\_works}: Checks geospatial proximity to known construction zones.
+  \item \texttt{markets}: Proximity to Vienna's weekly farmers' markets (vehicle avoidance).
+  \item \texttt{heuriger}: Proximity to wine taverns in Grinzing (pedestrian attraction).
+\end{itemize}
+
+\newpage
+
+\section{The Orchestrator: combined.py}
+
+\subsection{Module Structure}
+
+\texttt{combined.py} is the single point of entry for the heuristics system. It exports:
+
+\begin{lstlisting}
+def make_heuristic(params: dict) -> Callable:
+    """Return a closure h(node_id, goal_id, graph, params)."""
+\end{lstlisting}
+
+The closure returned by \texttt{make\_heuristic()} is passed to all eight pathfinding algorithms and called hundreds or thousands of times per route.
+
+\subsection{Enabling/Disabling Heuristics}
+
+The UI sends an optional \texttt{enabled\_heuristics} list. The interpretation rule is:
+
+\begin{itemize}
+  \item \textbf{Empty list:} All 30 heuristics active (baseline behaviour).
+  \item \textbf{Non-empty list:} \textit{Whitelist} --- only heuristics in the list are active.
+\end{itemize}
+
+\begin{lstlisting}
+def _enabled(enabled: set[str], key: str) -> bool:
+    return not enabled or key in enabled
+\end{lstlisting}
+
+This allows the UI to toggle heuristics on/off without backend recompilation.
+
+\subsection{Closure Construction Pseudocode}
+
+\begin{lstlisting}
+def make_heuristic(params):
+    # Extract all parameters
+    enabled = set(params.get("enabled_heuristics", []) or [])
+    vehicle, hour, date, weather, etc. = params[...]
+
+    # Infer black ice risk from temperature + humidity
+    weather = infer_black_ice(temperature, humidity, weather)
+
+    # Build static multiplier (once)
+    static_mult = 1.0
+    if _enabled(enabled, "weather"):
+        static_mult *= get_weather_multiplier(weather)
+    if _enabled(enabled, "time_of_day"):
+        static_mult *= get_time_multiplier(hour, day_of_week)
+    # ... (8 more static heuristics)
+
+    # Define closure
+    def heuristic(node_id, goal_id, graph, params=None):
+        h_base = haversine(node_lat, node_lon, goal_lat, goal_lon)
+        if h_base == 0:
+            return 0.0
+
+        mult = static_mult
+
+        # Goal-dependent tier
+        if _enabled(enabled, "parking"):
+            mult *= get_parking_multiplier(goal_district, vehicle)
+        # ... (6 more goal-dependent heuristics)
+
+        # Node-dependent tier
+        if _enabled(enabled, "intersection_density"):
+            mult *= get_intersection_penalty(node_id, graph)
+        # ... (3 more node-dependent heuristics)
+
+        # Edge-dependent tier (pick cheapest outgoing edge)
+        best_edge_mult = inf
+        for neighbor in adjacency[node_id]:
+            edge = edges[neighbor["edge_idx"]]
+            e_mult = 1.0
+            if _enabled(enabled, "surface"):
+                e_mult *= get_surface_multiplier(edge, vehicle)
+            # ... (11 more edge-dependent heuristics)
+            best_edge_mult = min(best_edge_mult, e_mult)
+
+        if best_edge_mult != inf:
+            mult *= best_edge_mult
+
+        h = h_base * mult
+
+        # Cap to preserve admissibility
+        return min(h, h_base * MAX_HEURISTIC_CAP)
+
+    return heuristic
+\end{lstlisting}
+
+\subsection{Admissibility and Capping}
+
+A* requires an \textit{admissible} heuristic that never overestimates true cost:
+
+\[
+h(n) \leq \text{true cost}(n \to \text{goal})
+\]
+
+However, weighted A* ($\text{weight} > 1$) relaxes this to \textit{bounded suboptimality}:
+
+\[
+\text{cost}(\text{solution}) \leq \text{weight} \times \text{optimal cost}
+\]
+
+To remain bounded, the system applies a hard cap:
+
+\begin{lstlisting}
+MAX_HEURISTIC_CAP = float(os.getenv("MAX_HEURISTIC_CAP", "50.0"))
+return min(h, h_base * MAX_HEURISTIC_CAP)
+\end{lstlisting}
+
+This ensures that even if multipliers stack to extreme values (e.g., heavy snow + night + cobblestone + uphill), the heuristic never exceeds $50\times$ the raw Haversine distance. The default is 50; increase to allow more aggressive heuristics (risking larger suboptimality gaps), or lower to stay closer to admissibility.
+
+\newpage
+
+\section{Heuristic Categories and Patterns}
+
+\subsection{Pattern 1: Lookup Tables (Static)}
+
+The simplest pattern: a dictionary of condition to multiplier.
+
+\subsubsection{Example: weather.py}
+
+\begin{lstlisting}
+WEATHER_MULTIPLIERS = {
+    "clear":        1.00,
+    "rain":         1.50,
+    "heavy_rain":   1.55,
+    "snow":         1.60,
+    "black_ice":    2.00,
+}
+
+def get_weather_multiplier(weather: str) -> float:
+    return WEATHER_MULTIPLIERS.get(weather, 1.0)
+\end{lstlisting}
+
+\textbf{Interpretation:} Black ice is $2\times$ slower than clear conditions. Rain is $1.5\times$ slower.
+
+\subsubsection{Example: vehicle\_type.py}
+
+\begin{lstlisting}
+VEHICLE_MULTIPLIERS = {
+    "car":       1.00,
+    "motorcycle": 0.85,  # Smaller, nimbler
+    "taxi":      1.05,   # More traffic awareness
+    "bus":       1.30,   # Larger, must avoid narrow lanes
+    "walking":   1.80,   # Slower base speed
+    "bicycle":   1.20,   # Moderate speed
+}
+\end{lstlisting}
+
+Motorcycles are faster (0.85); buses and walkers are slower (1.30, 1.80).
+
+\subsection{Pattern 2: Conditional Penalties (Static + Dynamic)}
+
+A heuristic that returns 1.0 (no penalty) in most cases but applies a multiplier in specific conditions.
+
+\subsubsection{Example: safety.py}
+
+\begin{lstlisting}
+def get_safety_multiplier(edge: dict, hour: int, vehicle: str) -> float:
+    if vehicle != "walking":
+        return 1.0
+    if not (hour >= 21 or hour < 5):
+        return 1.0  # Daytime: no penalty
+
+    lit = edge.get("lit", "unknown")
+    rt = edge.get("road_type", "")
+    if lit != "yes":
+        return 1.5  # Unlit road at night: penalty
+    if rt in ("primary", "secondary", "tertiary"):
+        return 0.9  # Lit primary road at night: incentive
+    return 1.1
+\end{lstlisting}
+
+\textbf{Logic:} Only apply night-safety penalties to pedestrians. Prefer lit primary roads at night (multiplier 0.9), penalize unlit roads (1.5), and use a neutral factor for other lit roads (1.1).
+
+\subsection{Pattern 3: Multi-Dimensional Lookup (Edge + Vehicle)}
+
+A heuristic that combines edge properties with vehicle type via nested dictionaries.
+
+\subsubsection{Example: surface.py}
+
+\begin{lstlisting}
+SURFACE_PENALTIES = {
+    "cobblestone": {"car": 1.05, "motorcycle": 1.10, "bicycle": 1.60, ...},
+    "gravel":      {"car": 1.15, "motorcycle": 1.20, "bicycle": 1.80, ...},
+    "unpaved":     {"car": 1.15, "motorcycle": 1.20, "bicycle": 1.80, ...},
+}
+
+def get_surface_multiplier(edge: dict, vehicle: str) -> float:
+    surface = edge.get("surface", "asphalt")
+    if surface in ("asphalt", "paved", "concrete"):
+        return 1.0  # Baseline
+    return SURFACE_PENALTIES.get(surface, {}).get(vehicle, 1.0)
+\end{lstlisting}
+
+\textbf{Interpretation:} Bicycles are much slower on gravel (1.80) than cars (1.15). Motorcycles are slower than cars on cobblestone (1.10 vs.\ 1.05).
+
+\subsection{Pattern 4: Geospatial Lookup (District-Based)}
+
+Heuristics that key off the Vienna district of a node or edge.
+
+\subsubsection{Example: parking.py}
+
+\begin{lstlisting}
+DISTRICT_PARKING_PENALTY = {
+    "1": 1.60,  # Innerstadt (central) --- very difficult
+    "2": 1.35,
+    "3": 1.25,
+    ...
+}
+
+def get_parking_multiplier(goal_district: str, vehicle: str) -> float:
+    if vehicle not in ("car", "truck", "taxi"):
+        return 1.0
+    return DISTRICT_PARKING_PENALTY.get(goal_district, 1.05)
+\end{lstlisting}
+
+\textbf{Interpretation:} Parking a car in district 1 is $1.6\times$ the cost of district 3 because of limited street parking and high garage fees.
+
+\subsection{Pattern 5: Time-Based Conditional (Hour, Day, Date)}
+
+Heuristics that respond to temporal conditions (rush hour, weekends, holidays).
+
+\subsubsection{Example: time\_of\_day.py}
+
+Typically returns multipliers based on:
+\begin{itemize}
+  \item Hour (0---23): Rush hours (8 AM, 5 PM) incur multipliers $> 1$.
+  \item Day of week (1---7): Weekends may have different patterns.
+\end{itemize}
+
+\subsubsection{Example: school\_zones.py}
+
+\begin{lstlisting}
+def get_school_multiplier(edge: dict, hour: int, minute: int, dow: int) -> float:
+    if not edge.get("school", False):
+        return 1.0
+    # Penalize school zones during school hours (7-9 AM, 11-1 PM, 3-5 PM)
+    if (7 <= hour < 9) or (11 <= hour < 13) or (15 <= hour < 17):
+        if dow not in (6, 7):  # Weekdays only
+            return 1.2
+    return 1.0
+\end{lstlisting}
+
+\subsection{Pattern 6: Proximity-Based (Geospatial Queries)}
+
+Heuristics that query the graph for nearby points of interest.
+
+\subsubsection{Example: road\_works.py}
+
+\begin{lstlisting}
+def get_road_works_multiplier(lat: float, lon: float, date: str) -> float:
+    # Check if node is within 200m of known construction zone
+    # and if construction is active on this date
+\end{lstlisting}
+
+\subsubsection{Example: markets.py}
+
+Similar: checks if the node is near a farmers' market that operates on the given day and hour, and returns a penalty (e.g., 1.3) to avoid congestion.
+
+\subsection{Pattern 7: Inference (Derived Conditions)}
+
+Heuristics that infer a condition from multiple parameters.
+
+\subsubsection{Example: weather.py --- Black Ice Inference}
+
+\begin{lstlisting}
+def infer_black_ice(temp: float, humidity: float, weather: str) -> str:
+    """Promote clear/fog to black_ice when cold + humid."""
+    if temp < 2 and humidity > 80 and weather in ("clear", "cloudy", "fog"):
+        return "black_ice"
+    return weather
+\end{lstlisting}
+
+\textbf{Logic:} When temperature drops below 2 degrees C and humidity exceeds 80\%, the system automatically upgrades the weather condition from clear or fog to black ice (multiplier 2.00).
+
+\newpage
+
+\section{The 30 Heuristics: Full Reference}
+
+All 30 heuristics are registered in \texttt{combined.py} in the \texttt{ALL\_HEURISTIC\_IDS} set. Below is a categorized reference.
+
+\subsection{Environmental (5 heuristics)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{ID} & \textbf{Module} & \textbf{Description} \\
+\midrule
+weather & weather.py & Rain, snow, fog, black ice \\
+visibility & visibility.py & Fog/mist distance penalty \\
+humidity & humidity.py & Moisture-related road conditions \\
+wind & wind.py & Wind speed and direction (vehicle-dependent) \\
+season & season.py & Seasonal road state (salt, leaf cover, etc.) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Temporal (5 heuristics)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{ID} & \textbf{Module} & \textbf{Description} \\
+\midrule
+time\_of\_day & time\_of\_day.py & Rush-hour congestion (8 AM, 5 PM, etc.) \\
+holiday\_historical & holiday\_historical.py & Holiday traffic patterns by district \\
+events & events.py & Concerts, sports events, street fairs \\
+headway & headway.py & Transit service frequency (buses, trams) \\
+nightnetwork & nightnetwork.py & Reduced road availability at night \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Vehicle-Type (3 heuristics)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{ID} & \textbf{Module} & \textbf{Description} \\
+\midrule
+vehicle\_type & vehicle\_type.py & Base speed by vehicle (car vs.\ bus vs.\ walking) \\
+vehicle\_type\_routing & vehicle\_type\_routing.py & Vehicle-specific forbidden roads \\
+delivery & delivery.py & Delivery-zone restrictions (time/vehicle) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Road Geometry and Condition (6 heuristics)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{ID} & \textbf{Module} & \textbf{Description} \\
+\midrule
+surface & surface.py & Asphalt vs.\ cobblestone vs.\ gravel \\
+elevation & elevation.py & Uphill penalty (by slope percentage) \\
+lane\_capacity & lane\_capacity.py & Multi-lane roads preferred for trucks \\
+tram\_tracks & tram\_tracks.py & Tram in the road surface (rain/snow penalty) \\
+snow\_priority & snow\_priority.py & Priority snow-clearing (main roads) \\
+road\_quality & road\_quality.py & Potholes, repairs, degraded surfaces \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Safety and Regulation (6 heuristics)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{ID} & \textbf{Module} & \textbf{Description} \\
+\midrule
+safety & safety.py & Lighting and road type at night (pedestrians) \\
+school\_zones & school\_zones.py & School-hour speed limits \\
+emission\_zones & emission\_zones.py & Low-emission zone entry penalties \\
+commuter\_bridges & commuter\_bridges.py & Bridge congestion (rush-hour peaks) \\
+road\_works & road\_works.py & Construction zones (geospatial + temporal) \\
+manual\_adjustment & manual\_adjustment.py & User-applied edge overrides \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Urban Features and Attractions (5 heuristics)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{ID} & \textbf{Module} & \textbf{Description} \\
+\midrule
+intersection\_density & intersection\_density.py & High density = slow navigation \\
+pedestrian\_density & pedestrian\_density.py & Foot traffic at destination (hour/date) \\
+markets & markets.py & Farmers' markets (weekly schedule) \\
+heuriger & heuriger.py & Wine taverns in Grinzing (seasonal/hourly) \\
+fiaker & fiaker.py & Horse-carriage zones (tourist routes) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Destination-Specific (3 heuristics)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{ID} & \textbf{Module} & \textbf{Description} \\
+\midrule
+parking & parking.py & Parking difficulty by district (cars only) \\
+scenic & scenic.py & Prefer scenic routes (if route\_profile = scenic) \\
+(reserved) & & (no additional destination-specific slots) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Total: 30 heuristics.}
+
+\newpage
+
+\section{Adding a New Heuristic}
+
+To add a new heuristic (e.g., noise pollution avoidance):
+
+\begin{enumerate}
+  \item \textbf{Create module:} Write \texttt{src/heuristics/noise.py} with:
+  \begin{lstlisting}
+def get_noise_multiplier(edge: dict, hour: int) -> float:
+    if hour >= 22 or hour < 6:
+        return 1.0  # Night: traffic already reduced
+
+    road_type = edge.get("road_type", "")
+    if road_type in ("motorway", "trunk"):
+        return 1.3  # High noise on major roads
+    return 1.0
+  \end{lstlisting}
+
+  \item \textbf{Import in combined.py:}
+  \begin{lstlisting}
+from src.heuristics.noise import get_noise_multiplier
+  \end{lstlisting}
+
+  \item \textbf{Register ID:} Add to \texttt{ALL\_HEURISTIC\_IDS}:
+  \begin{lstlisting}
+ALL_HEURISTIC_IDS = {
+    ..., "noise", ...
+}
+  \end{lstlisting}
+
+  \item \textbf{Place in correct tier:} For edge-dependent heuristics, add in the edge loop:
+  \begin{lstlisting}
+if _enabled(enabled, "noise"):
+    e_mult *= get_noise_multiplier(edge, hour)
+  \end{lstlisting}
+  For static or goal-dependent heuristics, place in the appropriate section.
+
+  \item \textbf{Test:} The heuristic is immediately available via the UI's \texttt{enabled\_heuristics} list.
+\end{enumerate}
+
+\newpage
+
+\section{Performance Considerations}
+
+\subsection{Closure-Freeing Optimization}
+
+The closure-building pattern (static tier computed once, dynamic tier reused) is critical for performance:
+
+\begin{lstlisting}
+# Expensive: re-compute weather every call
+def bad_heuristic(node, goal, graph, params):
+    weather = params.get("weather")
+    mult = get_weather_multiplier(weather)  # Called 1000s of times!
+    ...
+
+# Efficient: pre-compute static tier
+def make_good_heuristic(params):
+    weather_mult = get_weather_multiplier(params.get("weather"))
+    def heuristic(node, goal, graph, params=None):
+        mult = weather_mult  # Already computed
+        ...
+    return heuristic
+\end{lstlisting}
+
+The Vienna graph has approximately 1000 nodes; A* explores approximately 300--500 nodes per route. With 8 algorithms running in parallel, the heuristic is called approximately 2400--4000 times per pathfinding request. Precomputing the static tier (8 multiplications) saves approximately 16000--32000 multiplications per request.
+
+\subsection{Edge Proxy Strategy}
+
+Iterating all outgoing edges for each frontier node is expensive:
+
+\[
+\text{Cost per call} \approx O(\text{degree}(n) \times \text{num enabled heuristics})
+\]
+
+With an average degree of approximately 3 and 15 edge-dependent heuristics, each frontier node incurs approximately 45 heuristic evaluations. The proxy strategy (pick the cheapest edge) reduces this to a single pass.
+
+\subsection{Capping Mechanism}
+
+The hard cap ensures bounded suboptimality without re-evaluating the entire multiplier stack:
+
+\begin{lstlisting}
+return min(h, h_base * MAX_HEURISTIC_CAP)
+\end{lstlisting}
+
+This is $O(1)$ and prevents pathological blow-up when many heuristics stack.
+
+\newpage
+
+\section{Integration with Pathfinding Algorithms}
+
+All eight algorithms have the same interface:
+
+\begin{lstlisting}
+def find_path(graph, start_id, goal_id, heuristic_fn, params) -> PathResult
+\end{lstlisting}
+
+The heuristic function is called as:
+
+\begin{lstlisting}
+h_value = heuristic_fn(node_id, goal_id, graph, params)
+\end{lstlisting}
+
+\subsection{Admissibility Requirements}
+
+\begin{itemize}
+  \item \textbf{BFS, DFS, UCS:} Ignore the heuristic; no admissibility constraint.
+  \item \textbf{Dijkstra:} Ignores the heuristic (uses only $g(n)$).
+  \item \textbf{Greedy Best-First:} Uses heuristic as the only criterion; admissibility not required.
+  \item \textbf{A*:} Requires an admissible heuristic $h(n) \leq \text{true cost}(n \to \text{goal})$.
+  \item \textbf{Weighted A*:} Allows bounded-suboptimal heuristics (multiplied by a weight factor).
+  \item \textbf{Bidirectional A*:} Requires admissibility in both directions.
+\end{itemize}
+
+The static tier multipliers (weather, vehicle, time-of-day) are designed to be admissible for A*. The edge-dependent tier (surface, elevation) reflects actual road properties and remains admissible. The hard cap (\texttt{MAX\_HEURISTIC\_CAP}) ensures weighted A* stays bounded-suboptimal.
+
+\section{Configuration and Testing}
+
+\subsection{Environment Variables}
+
+\begin{itemize}
+  \item \texttt{MAX\_HEURISTIC\_CAP}: Maximum multiplier cap (default: 50.0). Lower for admissibility; raise for more aggressive heuristics.
+  \item No other heuristic-specific environment variables.
+\end{itemize}
+
+\subsection{Testing a Heuristic}
+
+To test a new heuristic without recompiling:
+
+\begin{lstlisting}
+# In a test script
+from src.graph.loader import load_graph
+from src.heuristics.combined import make_heuristic
+
+graph = load_graph()
+params = {
+    "weather": "snow",
+    "vehicle_type": "car",
+    "hour": 8,
+    ...
+}
+
+h_fn = make_heuristic(params)
+test_node = "some_node_id"
+goal_node = "goal_id"
+
+h_value = h_fn(test_node, goal_node, graph, params)
+print(f"Heuristic value: {h_value}")
+\end{lstlisting}
+
+\newpage
+
+\section{Mathematical Formalism of All Heuristics}
+\label{sec:math}
+
+This section gives the \emph{full mathematical specification} of every multiplier, the exact weight tables, the composition rule, and a fully worked end-to-end example. The goal is to let you predict $h(n,\text{goal})$ by hand for any parameter choice.
+
+\subsection{Unified Notation}
+
+Let
+\begin{align*}
+  n         &= \text{frontier (current) node} \\
+  g         &= \text{goal node} \\
+  G         &= (\mathcal{V}, \mathcal{E}) \text{ the Vienna subgraph} \\
+  \mathrm{adj}(n) &= \{\, e \in \mathcal{E} : e.\text{from} = n \,\} \\
+  d_0(n,g)  &= \text{haversine}(\phi_n, \lambda_n, \phi_g, \lambda_g) \quad [\text{metres}] \\
+  \theta    &= \text{request parameter bundle (weather, hour, vehicle, } \ldots\text{)} \\
+  \mathcal{K} &= \text{set of } 30 \text{ heuristic IDs (see \texttt{ALL\_HEURISTIC\_IDS})} \\
+  \mathcal{E}_{\text{on}} &\subseteq \mathcal{K} \text{ whitelist from UI (empty } \Rightarrow \mathcal{K}\text{)}
+\end{align*}
+
+Each heuristic $k \in \mathcal{K}$ exposes a multiplier function $m_k(\cdot) \in \mathbb{R}^+$. Define the activation indicator
+\[
+\mathbb{1}_k \;=\;
+\begin{cases}
+  1 & \mathcal{E}_{\text{on}} = \emptyset \ \lor\ k \in \mathcal{E}_{\text{on}} \\
+  0 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsection{Master Composition Rule}
+
+The heuristic decomposes into three tiers $\mathcal{S}, \mathcal{G}, \mathcal{N}$ (static, goal-dependent, node-dependent) plus an edge-proxy minimum over outgoing edges $\mathcal{D}$:
+
+\[
+\boxed{
+\;
+h(n,g;\theta) \;=\; \min\!\Bigl( d_0(n,g)\cdot M(n,g;\theta),\; C\cdot d_0(n,g)\Bigr)
+\;}
+\]
+with
+\[
+M(n,g;\theta) \;=\; \underbrace{\prod_{k\in\mathcal{S}} m_k(\theta)^{\mathbb{1}_k}}_{\text{closure-built once}}
+\;\cdot\;
+\underbrace{\prod_{k\in\mathcal{G}} m_k(g,\theta)^{\mathbb{1}_k}}_{\text{per-goal}}
+\;\cdot\;
+\underbrace{\prod_{k\in\mathcal{N}} m_k(n,G,\theta)^{\mathbb{1}_k}}_{\text{per-node}}
+\;\cdot\;
+\underbrace{\min_{e\in\mathrm{adj}(n)}\;\prod_{k\in\mathcal{D}} m_k(e,\theta)^{\mathbb{1}_k}}_{\text{edge proxy (cheapest outgoing)}}
+\]
+where $C = \texttt{MAX\_HEURISTIC\_CAP} = 50$ (env-overridable).
+
+The tier partition (exact as implemented in \texttt{combined.py}):
+\begin{align*}
+  \mathcal{S} &= \{\text{weather, time\_of\_day, vehicle\_type, visibility, humidity, nightnetwork, wind, headway}\} \\
+  \mathcal{G} &= \{\text{parking, holiday\_historical, events, fiaker, season, pedestrian\_density, delivery}\} \\
+  \mathcal{N} &= \{\text{intersection\_density, road\_works, markets, heuriger}\} \\
+  \mathcal{D} &= \{\text{surface, elevation, safety, emission\_zones, tram\_tracks, snow\_priority,} \\
+              &\qquad \text{commuter\_bridges, lane\_capacity, school\_zones, scenic, road\_quality, manual\_adjustment}\}
+\end{align*}
+
+\textbf{Why the min over edges?}\; Over-estimation breaks A*'s admissibility guarantee. Taking the \emph{cheapest} outgoing edge as a proxy gives a lower bound on edge quality, preserving $h \le h^*$ for the static+best-edge decomposition.
+
+\subsection{Tier $\mathcal{S}$: Static Multipliers (Closure-Built Once)}
+
+\subsubsection{Weather — \texttt{weather.py}}
+
+Base lookup (\emph{no entry for \texttt{clear}} — it falls back to the default $1.0$, i.e.\ neutral):
+\[
+W_{\text{base}}(w) = \begin{cases}
+1.10 & w = \text{cloudy} \\
+1.25 & w = \text{light\_rain} \\
+1.50 & w = \text{rain} \\
+1.55 & w = \text{heavy\_rain} \\
+1.60 & w = \text{thunderstorm} \\
+1.30 & w = \text{fog} \\
+1.40 & w = \text{light\_snow} \\
+1.60 & w = \text{snow} \\
+1.80 & w = \text{heavy\_snow} \\
+2.00 & w = \text{black\_ice} \\
+1.00 & \text{otherwise (incl.\ clear)}
+\end{cases}
+\]
+
+Vehicle rain penalty (stacked multiplicatively for exposed modes only):
+\[
+W_{\text{rain}}(w, v) \;=\;
+\begin{cases}
+\rho(v,w) & v\in\{\text{walking},\text{bicycle},\text{escooter}\}\ \land\ w\in\mathcal{W}_{\text{rain}} \\
+1 & \text{otherwise}
+\end{cases}
+\]
+with $\mathcal{W}_{\text{rain}} = \{\text{light\_rain, rain, heavy\_rain, thunderstorm}\}$ and
+
+\[
+\rho =
+\begin{array}{c|cccc}
+ & \text{light\_rain} & \text{rain} & \text{heavy\_rain} & \text{thunderstorm} \\\hline
+\text{walking}  & 1.35 & 1.70 & 2.10 & 2.30 \\
+\text{bicycle}  & 1.30 & 1.60 & 1.95 & 2.20 \\
+\text{escooter} & 1.30 & 1.65 & 2.00 & 2.25
+\end{array}
+\]
+
+Effective weather multiplier:
+\[
+m_{\text{weather}}(w,v,T,H) = W_{\text{base}}\!\bigl(\mathrm{BI}(w,T,H)\bigr) \cdot W_{\text{rain}}(w,v)
+\]
+with black-ice inference
+\[
+\mathrm{BI}(w,T,H) =
+\begin{cases}
+\text{black\_ice} & T<2^\circ\text{C}\ \land\ H>80\%\ \land\ w\in\{\text{clear, cloudy, fog}\} \\
+w & \text{otherwise.}
+\end{cases}
+\]
+
+\subsubsection{Time of Day — \texttt{time\_of\_day.py}}
+
+Piecewise over the hour $h\in[0,24)$, with weekday/weekend split ($\text{wknd} = \mathbb{1}[\text{dow}\ge 5]$):
+\[
+m_{\text{time}}(h,\text{dow}) =
+\begin{cases}
+(0.70, 0.65) & h\in[0,5) \\
+(1.00, 0.75) & h\in[5,7) \\
+(1.60, 0.90) & h\in[7,9)   & \text{AM rush} \\
+(1.10, 1.00) & h\in[9,11) \\
+(1.30, 1.15) & h\in[11,13) & \text{lunch} \\
+(1.10, 1.00) & h\in[13,15) \\
+(1.40, 1.10) & h\in[15,17) \\
+(1.70, 1.10) & h\in[17,19) & \text{PM rush} \\
+(1.20, 1.30) & h\in[19,22) & \text{evening} \\
+(0.80, 1.10) & h\in[22,24)
+\end{cases}
+\]
+(weekday value, weekend value). Select by $\text{wknd}$.
+
+\subsubsection{Vehicle Type — \texttt{vehicle\_type.py}}
+\[
+m_{\text{vehicle}}(v) = \begin{cases}
+1.00 & v=\text{car} \\
+0.85 & v=\text{motorcycle} \\
+1.05 & v=\text{taxi} \\
+1.30 & v=\text{bus} \\
+0.40 & v=\text{metro} \\
+0.45 & v=\text{train} \\
+1.80 & v=\text{walking} \\
+1.20 & v=\text{bicycle} \\
+1.60 & v=\text{truck} \\
+1.30 & v=\text{escooter} \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsubsection{Visibility — \texttt{visibility.py}}
+Let $V$ be metres of visibility.
+\[
+m_{\text{vis}}(V) =
+\begin{cases}
+1.00 & V\ge 3000 \\
+1.15 & 1000 \le V < 3000 \\
+1.35 & 300  \le V < 1000 \\
+1.60 & V < 300.
+\end{cases}
+\]
+
+\subsubsection{Humidity — \texttt{humidity.py}}
+\[
+m_{\text{hum}}(H,v) =
+\begin{cases}
+1.10 & v\in\{\text{walking,bicycle,escooter}\}\ \land\ H>85 \\
+1.05 & v\in\{\text{walking,bicycle,escooter}\}\ \land\ H<20 \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsubsection{Night Network — \texttt{nightnetwork.py}}
+\[
+m_{\text{night}}(v,h) =
+\begin{cases}
+1.30 & v\in\{\text{bus, metro}\}\ \land\ h\in[0,5) \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsubsection{Wind — \texttt{wind.py}}
+Let $s$ be wind speed (m/s), $\alpha$ wind bearing (deg), $\beta$ travel heading (deg, default $0$). Define angular delta and headwind component
+\[
+\Delta = \bigl|((\alpha-\beta+180)\bmod 360) - 180\bigr|,\qquad H_w = s\cos(\Delta\cdot\pi/180).
+\]
+Then
+\[
+m_{\text{wind}}(v,s,\alpha,\beta) =
+\begin{cases}
+1.0 & v\notin\{\text{bicycle,walking,escooter}\}\ \lor\ s<3\ \lor\ H_w\le 0 \\
+1.0 + 0.03\,H_w & v=\text{bicycle} \\
+1.0 + 0.02\,H_w & v\in\{\text{walking, escooter}\}.
+\end{cases}
+\]
+
+\subsubsection{Headway — \texttt{headway.py}}
+Transit-only. Let $\text{peak}=\mathbb{1}[h\in[7,9)\cup[16,19)]$ and wait $w(v,\text{peak})$ minutes:
+\[
+w = \begin{cases}
+3 & v=\text{metro},\ \text{peak}=1 \\
+7 & v=\text{metro},\ \text{peak}=0 \\
+10 & v=\text{train},\ \text{peak}=1 \\
+30 & v=\text{train},\ \text{peak}=0.
+\end{cases}
+\]
+\[
+m_{\text{hdwy}}(v,h) = \begin{cases} 1.0 + 0.02\,w & v\in\{\text{metro,train}\} \\ 1 & \text{else.} \end{cases}
+\]
+
+\subsection{Tier $\mathcal{G}$: Goal-Dependent Multipliers}
+
+Let $D_g$ be the goal district string (``1''…``23'' or ``unknown'').
+
+\subsubsection{Parking — \texttt{parking.py}}
+Cars / trucks / taxis only:
+\[
+m_{\text{park}}(D_g,v) =
+\begin{cases}
+1.60,1.35,1.25,1.20,1.20,1.40,1.45,1.30,1.25 & D_g=1,2,\ldots,9 \\
+1.05 & v\in\{\text{car,truck,taxi}\}\ \land\ D_g \notin \{1..9\} \\
+1.00 & \text{other vehicles.}
+\end{cases}
+\]
+
+\subsubsection{Holiday — \texttt{holiday\_historical.py}}
+On Austrian public holidays (13 dates in 2026):
+\[
+m_{\text{hol}}(d, D_g) =
+\begin{cases}
+1.20 & d\in\mathcal{H}_{2026}\ \land\ D_g\in\{1,6,7,8\} \\
+0.80 & d\in\mathcal{H}_{2026}\ \land\ D_g\notin\{1,6,7,8\} \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsubsection{Events — \texttt{events.py}}
+For each scheduled event $e=(d_e, [h_1,h_2), Z_e, \mu_e)$:
+\[
+m_{\text{evt}}(d,h,D_g) = \max\Bigl\{\,\mu_e : d=d_e,\ h\in[h_1,h_2),\ D_g\in Z_e\,\Bigr\} \cup \{1.0\}.
+\]
+Defaults: Vienna Marathon $2.50$ (zones 1-4,9, 06:00-15:00), Lifeball $1.80$ (zone 1), Opernball $1.60$ (zone 1).
+
+\subsubsection{Fiaker — \texttt{fiaker.py}}
+\[
+m_{\text{fiaker}}(D_g,v,h) =
+\begin{cases}
+1.25 & v\in\{\text{car, bicycle, motorcycle}\}\ \land\ D_g=1\ \land\ h\in[10,18) \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsubsection{Season — \texttt{season.py}}
+Let $M$ be month $\in[1,12]$:
+\[
+m_{\text{season}}(M,D_g) =
+\begin{cases}
+1.15 & M\in\{6,7,8\}\ \land\ D_g\in\{1,6,7\}\ (\text{summer tourists}) \\
+1.25 & M\in\{11,12\}\ \land\ D_g\in\{1,6,7,8\}\ (\text{Advent markets}) \\
+0.95 & M\in\{1,2\}\ \land\ D_g\ne 1\ (\text{winter lull}) \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsubsection{Pedestrian Density — \texttt{pedestrian\_density.py}}
+Zone base $P(D_g)$: $P(1)=1.35, P(6)=1.20, P(7)=1.20, P(8)=1.10$, else $1.0$.
+\[
+m_{\text{ped}}(D_g,v,h,d) =
+\begin{cases}
+P(D_g) \cdot 1.15 & v\in\mathcal{V}_{\text{road}}\ \land\ P(D_g)>1\ \land\ h\in[11,20)\ \land\ \mathrm{holiday}(d) \\
+P(D_g)            & v\in\mathcal{V}_{\text{road}}\ \land\ P(D_g)>1\ \land\ h\in[11,20) \\
+1.00              & \text{otherwise}
+\end{cases}
+\]
+with $\mathcal{V}_{\text{road}} = \{\text{car, truck, bicycle, motorcycle}\}$.
+
+\subsubsection{Delivery — \texttt{delivery.py}}
+\[
+m_{\text{deliv}}(D_g,v,h) =
+\begin{cases}
+1.80 & v=\text{truck}\ \land\ D_g=1\ \land\ h\in[7,19) \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsection{Tier $\mathcal{N}$: Node-Dependent Multipliers}
+
+\subsubsection{Intersection Density — \texttt{intersection\_density.py}}
+Let $\deg(n)=|\mathrm{adj}(n)|$, $s(n)\in\{0,1\}$ the traffic-signal flag, $Z(D_n)$ the zone multiplier:
+\[
+Z(D) =
+\begin{cases}
+1.30 & D=1 \\
+1.10 & D\in\{2,3\} \\
+1.15 & D=6 \\
+1.20 & D\in\{7,8\} \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+\[
+m_{\text{inter}}(n) =
+\begin{cases}
+1 & \deg(n)\le 2 \\
+\bigl[1 + 0.05(\deg(n)-2) + 0.10\,s(n)\bigr]\cdot Z(D_n) & \deg(n)>2.
+\end{cases}
+\]
+
+\subsubsection{Road Works — \texttt{road\_works.py}}
+For each active construction record $r=(\phi_r,\lambda_r,R_r,[d_1,d_2],\mu_r)$:
+\[
+m_{\text{rw}}(\phi_n,\lambda_n,d) = \max\bigl\{\,\mu_r : d_1\le d\le d_2,\ d_0(\phi_n,\lambda_n,\phi_r,\lambda_r)<R_r\,\bigr\}\cup\{1.0\}.
+\]
+Default $\mu_r=1.5$, $R_r=150$ m.
+
+\subsubsection{Markets — \texttt{markets.py}}
+Table of $K$ markets $(\phi_k,\lambda_k,R_k,\text{dow}_k,[h_1^k,h_2^k))$:
+\[
+m_{\text{mkt}}(\phi_n,\lambda_n,\text{dow},h) =
+\begin{cases}
+1.45 & \exists k:\ \text{dow}_k\in\{-1,\text{dow}\}\ \land\ h\in[h_1^k,h_2^k)\ \land\ d_0<R_k \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+Radii 200–250 m; Naschmarkt daily, others Saturday.
+
+\subsubsection{Heuriger — \texttt{heuriger.py}}
+Grinzing / Neustift / Stammersdorf / Mauer ($R = 300$–$400$ m):
+\[
+m_{\text{heur}}(\phi_n,\lambda_n,M,\text{dow},h) =
+\begin{cases}
+1.35 & M\in\{9,10\}\ \land\ \text{dow}\in\{4,5\}\ \land\ h\in[16,23)\ \land\ d_0<R \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsection{Tier $\mathcal{D}$: Edge-Dependent Multipliers (Per-Outgoing-Edge)}
+
+Evaluated inside $\displaystyle\min_{e\in\mathrm{adj}(n)}$.
+
+\subsubsection{Surface — \texttt{surface.py}}
+Asphalt / paved / concrete $\mapsto 1.0$. Otherwise by table:
+\[
+m_{\text{surf}}(e,v) =
+\begin{array}{c|cccccc}
+\text{surface}\backslash v & \text{car} & \text{moto} & \text{bicycle} & \text{walking} & \text{bus} & \text{escooter} \\\hline
+\text{cobblestone} & 1.05 & 1.10 & 1.60 & 1.10 & 1.15 & 1.70 \\
+\text{sett}        & 1.03 & 1.05 & 1.40 & 1.05 & 1.10 & 1.50 \\
+\text{unpaved}     & 1.15 & 1.20 & 1.80 & 1.20 & 1.30 & 2.00 \\
+\text{gravel}      & 1.15 & 1.20 & 1.80 & 1.20 & 1.30 & 2.00 \\
+\text{metal}       & 1.10 & 1.30 & 1.90 & 1.20 & 1.00 & 2.00 \\
+\text{wood}        & 1.05 & 1.20 & 1.50 & 1.10 & 1.05 & 1.80 \\
+\end{array}
+\]
+Unknown vehicle or unknown surface $\Rightarrow 1.0$.
+
+\subsubsection{Elevation — \texttt{elevation.py}}
+Let $\text{slope}(e) = \dfrac{z_2 - z_1}{\max(\ell_e,1)}\cdot 100$ (percent grade). Applies only to walking/bicycle/bus/escooter.
+\[
+m_{\text{elev}}(e,v) =
+\begin{cases}
+1 & v\notin\{\text{walking,bicycle,bus,escooter}\}\ \lor\ \text{slope}\le 0 \\
+1 + 0.03\,\text{slope} & v=\text{bus} \\
+1 + 0.05\,\text{slope} & \text{else.}
+\end{cases}
+\]
+
+\subsubsection{Safety — \texttt{safety.py}} Walking only, night window $h\in[21,24)\cup[0,5)$:
+\[
+m_{\text{safe}}(e,h,v) =
+\begin{cases}
+1.5 & v=\text{walking},\ \text{night},\ \text{lit}\ne\text{yes} \\
+0.9 & v=\text{walking},\ \text{night},\ \text{lit}=\text{yes},\ \text{rt}\in\{\text{primary,secondary,tertiary}\} \\
+1.1 & v=\text{walking},\ \text{night},\ \text{lit}=\text{yes},\ \text{other rt} \\
+1.0 & \text{otherwise.}
+\end{cases}
+\]
+
+\subsubsection{Emission — \texttt{emission\_zones.py}} Motorised only. If \texttt{motor\_vehicle} $\in\{\text{no, private, destination}\}$: $\mathbf{8.0}$ (near-forbidden); else $1.0$.
+
+\subsubsection{Tram Tracks — \texttt{tram\_tracks.py}} Bicycles only, on edges with \texttt{tram\_track=True}:
+\[
+m_{\text{tram}}(e,v,w) = \begin{cases}
+1.70 & \text{wet conditions } w\in\mathcal{W}_{\text{wet}} \\
+1.25 & \text{dry} \\
+1.00 & \text{not bicycle or no tram track}
+\end{cases}
+\]
+with $\mathcal{W}_{\text{wet}}=\{\text{light\_rain, rain, heavy\_rain, snow, heavy\_snow, black\_ice}\}$.
+
+\subsubsection{Snow Priority — \texttt{snow\_priority.py}} Only under $w\in\{\text{snow, heavy\_snow, light\_snow, black\_ice}\}$:
+\[
+m_{\text{snow}}(e,w) = \begin{cases} 1.05 & \text{prio}=A \\ 1.60 & \text{prio}\ne A \\ 1.00 & \text{non-winter }w. \end{cases}
+\]
+
+\subsubsection{Commuter Bridges — \texttt{commuter\_bridges.py}} Only weekdays ($\text{dow}<5$), only rush $h\in[7,9)\cup[16,19)$:
+\[
+m_{\text{brdg}}(e,h,\text{dow}) =
+\begin{cases}
+2.00 & \text{Praterbrücke} \\
+1.80 & \text{Reichsbrücke} \\
+1.60 & \text{Nordbrücke} \\
+1.50 & \text{Floridsdorfer Brücke} \\
+1.40 & \text{Stadionbrücke} \\
+1.00 & \text{otherwise (or weekend / off-peak).}
+\end{cases}
+\]
+
+\subsubsection{Lane Capacity — \texttt{lane\_capacity.py}} Motorised bulk vehicles:
+\[
+m_{\text{lane}}(e,v) =
+\begin{cases}
+0.90 & v\in\mathcal{V}_{\text{bulk}},\ \text{lanes}\ge 4 \\
+0.95 & v\in\mathcal{V}_{\text{bulk}},\ \text{lanes}=3 \\
+1.10 & v\in\mathcal{V}_{\text{bulk}},\ \text{lanes}\le 1 \\
+1.00 & \text{otherwise.}
+\end{cases}
+\]
+with $\mathcal{V}_{\text{bulk}} = \{\text{car, bus, truck, taxi}\}$.
+
+\subsubsection{School Zones — \texttt{school\_zones.py}} Weekdays only. Windows $\Omega = \{7{:}30{-}8{:}15,\ 13{:}00{-}14{:}00\}$:
+\[
+m_{\text{sch}}(e,h,\text{min},\text{dow}) = \begin{cases} 1.35 & \text{near\_school}\land(h,\text{min})\in\Omega\land\text{dow}<5 \\ 1.00 & \text{otherwise.} \end{cases}
+\]
+
+\subsubsection{Scenic — \texttt{scenic.py}} Only when \texttt{route\_profile = greenest}:
+\[
+m_{\text{scen}}(e,\text{prof}) = \begin{cases} 0.85 & \text{greenest}\ \land\ \text{near\_green\_space} \\ 1.05 & \text{greenest, not green} \\ 1.00 & \text{other profiles.} \end{cases}
+\]
+
+\subsubsection{Road Quality — \texttt{road\_quality.py}} Composite of three factors:
+\[
+m_{\text{rq}}(e,v) = \mathrm{clamp}\!\Bigl[0.4,\ 2.5,\ \underbrace{T(\text{rt})}_{\text{road type}}\cdot \underbrace{S(\text{surf})}_{\text{surface}}\cdot \underbrace{\mathrm{clamp}[0.6,1.5,\,50/v_{\max}]}_{\text{maxspeed}}\cdot \underbrace{\tau(e,v)}_{\text{tram tracks penalty}}\Bigr]
+\]
+with
+\[
+T = \{\text{primary}:0.55,\ \text{secondary}:0.65,\ \text{tertiary}:0.80,\ \text{residential}:1.00,\ \text{living\_street}:1.15,
+\]
+\[
+\text{footway}:1.50,\ \text{path}:1.55,\ \text{steps}:2.50,\ \text{elevator}:3.00,\ \ldots\}
+\]
+\[
+S = \{\text{asphalt}:0.95,\ \text{paving\_stones}:1.10,\ \text{cobblestone}:1.30,\ \text{gravel}:1.40,\ \text{dirt}:1.50,\ \ldots\}
+\]
+\[
+\tau(e,v) = \begin{cases} 1.25 & \text{tram\_track}\ \land\ v\in\{\text{bicycle,escooter,motorcycle}\} \\ 1 & \text{else.}\end{cases}
+\]
+
+\subsubsection{Manual Adjustment — \texttt{manual\_adjustment.py}} Per-edge slider $I\in[0,100]$:
+\[
+m_{\text{man}}(e,O) = \begin{cases} 0.5 + 0.025\,I & e.\text{key} \in O \\ 1.0 & \text{otherwise.} \end{cases}
+\]
+Range $[0.5,\ 3.0]$.
+
+\subsection{Summary Weight Tables}
+
+\begin{table}[H]
+\centering\small
+\caption{Maximum penalty each heuristic can contribute, ranked.}
+\begin{tabular}{lcc}
+\toprule
+Heuristic & Max multiplier & Context \\\midrule
+emission\_zones      & $8.00$ & motor vehicle on ``no'' edge (soft-ban) \\
+road\_quality        & $2.50$ & capped (e.g.\ steps + dirt + slow) \\
+weather (walking)    & $2.00\cdot 2.30 = 4.60$ & thunderstorm + walking stack \\
+weather (bicycle)    & $2.00\cdot 2.20 = 4.40$ & thunderstorm + bicycle \\
+manual\_adjustment   & $3.00$ & intensity $=100$ \\
+events               & $2.50$ & Marathon zones \\
+weather              & $2.00$ & black\_ice \\
+commuter\_bridges    & $2.00$ & Praterbrücke in rush \\
+delivery             & $1.80$ & truck into district 1 \\
+surface              & $2.00$ & escooter on gravel \\
+tram\_tracks         & $1.70$ & bike + wet \\
+snow\_priority       & $1.60$ & prio-B road + snow \\
+parking              & $1.60$ & district 1 \\
+visibility           & $1.60$ & $V<300$ m \\
+time\_of\_day        & $1.70$ & 17–19 weekday \\
+season               & $1.25$ & Advent \\
+school\_zones        & $1.35$ & school window \\
+heuriger             & $1.35$ & Fri–Sat 16–23, Sep–Oct \\
+fiaker               & $1.25$ & district 1 mid-day \\
+intersection\_density & $\sim 1.9$ & high degree + signal + D1 \\
+MAX\_HEURISTIC\_CAP  & $50.0$ & global limiter $C$ \\\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\caption{Maximum bonus (multiplier $<1$) each heuristic can contribute.}
+\begin{tabular}{lcc}
+\toprule
+Heuristic & Min multiplier & Context \\\midrule
+vehicle\_type (metro) & $0.40$ & fast transit \\
+vehicle\_type (train) & $0.45$ & \\
+manual\_adjustment    & $0.50$ & intensity 0 \\
+road\_quality         & $0.40$ & clamp floor \\
+time\_of\_day         & $0.65$ & weekend 0–5 \\
+holiday\_historical   & $0.80$ & outer district holiday \\
+scenic                & $0.85$ & greenest profile \\
+lane\_capacity        & $0.90$ & $\ge 4$ lanes \\
+safety                & $0.90$ & lit primary road at night \\
+season                & $0.95$ & winter outer district \\\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Fully Worked Example}
+
+\textbf{Scenario:} bicycle commute, 2026-04-21 (Tuesday), $h=17$, rainy ($w=\text{rain}$), $T=10^\circ$C, $H=80\%$, $V=2000$ m, wind $s=5$ m/s, $\alpha=180$, destination district $=1$, \texttt{route\_profile=fastest}, all 30 heuristics enabled, frontier node $n$ with $\deg(n)=4$, no signal, on a cobblestone residential edge with tram track, slope $+3\%$, 50 km/h posted, in district 1, no road works / markets / heuriger / event.
+
+\paragraph{Tier $\mathcal{S}$ (computed once)}
+\begin{align*}
+m_{\text{weather}} &= W_{\text{base}}(\text{rain})\cdot \rho(\text{bicycle, rain}) = 1.50 \cdot 1.60 = 2.40 \\
+m_{\text{time}}    &= 1.70 \quad (\text{weekday 17–19}) \\
+m_{\text{vehicle}} &= 1.20 \\
+m_{\text{vis}}     &= 1.15 \quad (1000\le 2000<3000) \\
+m_{\text{hum}}     &= 1.00 \quad (20<80\le 85) \\
+m_{\text{night}}   &= 1.00 \\
+m_{\text{wind}}    &= 1 + 0.03\cdot 5\cos 0^\circ = 1.15 \\
+m_{\text{hdwy}}    &= 1.00 \\[2pt]
+\Rightarrow\ M_{\mathcal{S}} &= 2.40\cdot 1.70\cdot 1.20\cdot 1.15\cdot 1.15 \approx 6.474
+\end{align*}
+
+\paragraph{Tier $\mathcal{G}$}
+\begin{align*}
+m_{\text{park}} &= 1.00 \ (\text{bicycle}) \\
+m_{\text{hol}}  &= 1.00 \ (\text{not a holiday}) \\
+m_{\text{evt}}  &= 1.00 \\
+m_{\text{fiaker}} &= 1.00 \ (h=17\notin[10,18)? \text{actually }17\in[10,18),\text{ yes }\Rightarrow 1.25) \\
+m_{\text{fiaker}} &= 1.25 \\
+m_{\text{season}} &= 1.00 \ (M=4) \\
+m_{\text{ped}}   &= 1.35 \ (\text{D1, bicycle, } h\in[11,20)) \\
+m_{\text{deliv}} &= 1.00 \\[2pt]
+\Rightarrow\ M_{\mathcal{G}} &= 1.25\cdot 1.35 = 1.6875
+\end{align*}
+
+\paragraph{Tier $\mathcal{N}$}
+\begin{align*}
+m_{\text{inter}} &= \bigl[1 + 0.05\cdot (4-2)\bigr]\cdot Z(1) = 1.10\cdot 1.30 = 1.43 \\
+m_{\text{rw}} &= m_{\text{mkt}} = m_{\text{heur}} = 1.00 \\[2pt]
+\Rightarrow\ M_{\mathcal{N}} &= 1.43
+\end{align*}
+
+\paragraph{Tier $\mathcal{D}$ (evaluated on the chosen proxy edge — assume it is the edge above)}
+\begin{align*}
+m_{\text{surf}}   &= 1.60 \ (\text{cobblestone, bicycle}) \\
+m_{\text{elev}}   &= 1 + 0.05\cdot 3 = 1.15 \\
+m_{\text{safe}}   &= 1.00 \ (v\ne\text{walking}) \\
+m_{\text{emis}}   &= 1.00 \ (\text{bicycle}) \\
+m_{\text{tram}}   &= 1.70 \ (\text{bicycle + wet}) \\
+m_{\text{snow}}   &= 1.00 \ (\text{not snow}) \\
+m_{\text{brdg}}   &= 1.00 \\
+m_{\text{lane}}   &= 1.00 \ (\text{bicycle}) \\
+m_{\text{sch}}    &= 1.00 \\
+m_{\text{scen}}   &= 1.00 \ (\text{profile fastest}) \\
+m_{\text{rq}}     &= \mathrm{clamp}[0.4,2.5,\ 1.00\cdot 1.30\cdot 1.00\cdot 1.25] = 1.625 \\
+m_{\text{man}}    &= 1.00 \\[2pt]
+\Rightarrow\ M_{\mathcal{D}} &= 1.60\cdot 1.15\cdot 1.70\cdot 1.625 \approx 5.083
+\end{align*}
+
+\paragraph{Combined}
+\[
+M = 6.474\cdot 1.6875\cdot 1.43\cdot 5.083 \approx 79.4
+\]
+Cap kicks in: $\min(79.4,\ 50) = 50$. So
+\[
+h(n,g) = 50 \cdot d_0(n,g).
+\]
+
+If $d_0(n,g)=1200$ m then $h=60\,000$ m. Any algorithm using this $h$ will interpret the cost as equivalent to travelling 60 km in Haversine units for what is physically a 1.2 km straight-line distance — reflecting the compounded misery of rush-hour, rain, cobblestone, tram tracks, dense intersection, pedestrian zone, and fiaker district.
+
+\subsection{Intuition: What Dominates?}
+
+Because all factors combine multiplicatively, a \emph{single large factor} can overwhelm many small ones:
+\[
+\underbrace{1.10\cdot 1.15\cdot 1.05\cdot 1.10}_{\approx 1.46} \quad\text{vs.}\quad \underbrace{8.00}_{\text{emission no-zone}}
+\]
+The 8.00 emission penalty (one edge) pushes $M$ past the cap on its own. This is intentional: it functions as a \emph{soft forbidden-road} signal while letting the search still fall through if no alternative exists.
+
+Rush-hour ($\times 1.70$) $\times$ rain ($\times 1.50$) $\times$ vehicle ($\times 1.20$) already gives $\approx 3.06$ before touching any edge. Two or three dynamic factors (cobblestone, tram, slope) easily put $M \in [10, 50]$, where the cap becomes the binding constraint. This is why the cap $C=50$ exists: without it, worst-case $M$ can exceed $10^3$ and weighted A* loses its suboptimality bound.
+
+\subsection{Admissibility Sketch}
+
+Let $\pi^*=n\!\to\!v_1\!\to\!\cdots\!\to\!g$ the optimal path with true edge costs $c^*(e_i)$. An admissible heuristic needs
+\[
+h(n,g) \;\le\; \sum_i c^*(e_i).
+\]
+By construction, $c^*(e_i) = \ell_{e_i}\cdot M^*(e_i,\theta)$ where $M^*$ is the \emph{true} cost multiplier (unknown to $h$). The heuristic uses $d_0(n,g) \le \sum_i \ell_{e_i}$ (triangle inequality) and the \emph{best-edge min} underestimates $M^*$ per step. Composition therefore holds up to the cap, which preserves $\epsilon$-admissibility with $\epsilon = C \cdot \max_k m_k^{-1}$.
+
+\newpage
+
+\section{Summary}
+
+The heuristics system in \texttt{src/heuristics/} is a modular, efficient, and interactive cost model that bridges the gap between pure distance-based pathfinding and real-world routing.
+
+\subsection{Key Design Points}
+
+\begin{enumerate}
+  \item \textbf{Three-tier evaluation:} Static (pre-computed), goal-dependent (per-route), and edge-dependent (per-frontier-node).
+  \item \textbf{Multiplicative composition:} Individual multipliers combine via multiplication, not addition.
+  \item \textbf{Closure factory pattern:} Pre-computing static multipliers into a closure achieves sub-millisecond heuristic latency.
+  \item \textbf{Edge proxy strategy:} Checking only the cheapest outgoing edge avoids iterating all neighbors.
+  \item \textbf{Admissibility capping:} A hard cap ensures A* and weighted A* remain bounded-suboptimal.
+  \item \textbf{Modularity:} 30 independent heuristics can be toggled via the UI without recompilation.
+\end{enumerate}
+
+\subsection{File Organization}
+
+\begin{itemize}
+  \item \texttt{combined.py}: Orchestrator; closure factory; two-tier builder; edge-loop iterator.
+  \item \texttt{*.py} (30 modules): Individual heuristics; each exports a single \texttt{get\_*\_multiplier()} function.
+  \item \texttt{\_\_init\_\_.py}: Module metadata (currently minimal).
+\end{itemize}
+
+\subsection{Code Style}
+
+All heuristics follow consistent patterns:
+\begin{itemize}
+  \item Input: edge dict or parameters; output: multiplier float.
+  \item No side effects; pure functions.
+  \item Default multiplier: 1.0 (no penalty).
+  \item Multiplier $> 1$: penalty (slower); $< 1$: incentive (faster).
+\end{itemize}
+
+\end{document}

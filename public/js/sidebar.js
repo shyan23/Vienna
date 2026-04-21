@@ -1,40 +1,5 @@
-/* sidebar.js — form state, heuristic toggles, weight breakdown */
+/* sidebar.js — form state, vehicle/weather/conditions */
 const Sidebar = (() => {
-  // 22+ heuristics exposed in the UI (IDs must match backend ALL_HEURISTIC_IDS)
-  const HEURISTICS_METADATA = [
-    { id: 'weather',             icon: '⛅',  name: 'Weather',              kind: 'penalty' },
-    { id: 'time_of_day',         icon: '⏰',  name: 'Time of day',          kind: 'penalty' },
-    { id: 'vehicle_type',        icon: '🚗',  name: 'Vehicle type',         kind: 'neutral' },
-    { id: 'intersection_density',icon: '🚦',  name: 'Intersection density', kind: 'penalty' },
-    { id: 'surface',             icon: '🪨',  name: 'Surface quality',      kind: 'penalty' },
-    { id: 'elevation',           icon: '⛰',   name: 'Elevation',            kind: 'penalty' },
-    { id: 'safety',              icon: '🛡',  name: 'Safety',               kind: 'penalty' },
-    { id: 'emission_zones',      icon: '🌱',  name: 'Emission zones',       kind: 'penalty' },
-    { id: 'headway',             icon: '📏',  name: 'Headway',              kind: 'penalty' },
-    { id: 'tram_tracks',         icon: '🚊',  name: 'Tram tracks',          kind: 'penalty' },
-    { id: 'wind',                icon: '💨',  name: 'Wind',                 kind: 'penalty' },
-    { id: 'parking',             icon: '🅿',  name: 'Parking',              kind: 'penalty' },
-    { id: 'scenic',              icon: '🌿',  name: 'Scenic bonus',         kind: 'bonus'   },
-    { id: 'school_zones',        icon: '🏫',  name: 'School zones',         kind: 'penalty' },
-    { id: 'holiday_historical',  icon: '🎄',  name: 'Holiday traffic',      kind: 'penalty' },
-    { id: 'events',              icon: '🎭',  name: 'Event closures',       kind: 'penalty' },
-    { id: 'fiaker',              icon: '🐴',  name: 'Fiaker (horse cab)',   kind: 'penalty' },
-    { id: 'snow_priority',       icon: '❄',   name: 'Snow priority',        kind: 'penalty' },
-    { id: 'commuter_bridges',    icon: '🌉',  name: 'Commuter bridges',     kind: 'penalty' },
-    { id: 'markets',             icon: '🛒',  name: 'Saturday markets',     kind: 'penalty' },
-    { id: 'heuriger',            icon: '🍷',  name: 'Heuriger season',      kind: 'penalty' },
-    { id: 'season',              icon: '🍂',  name: 'Season',               kind: 'penalty' },
-    { id: 'lane_capacity',       icon: '🛣',  name: 'Lane capacity',        kind: 'penalty' },
-    { id: 'road_works',          icon: '🚧',  name: 'Road works',           kind: 'penalty' },
-    { id: 'humidity',            icon: '💧',  name: 'Humidity',             kind: 'penalty' },
-    { id: 'visibility',          icon: '👁',  name: 'Visibility',           kind: 'penalty' },
-    { id: 'pedestrian_density',  icon: '🚶',  name: 'Pedestrian density',   kind: 'penalty' },
-    { id: 'delivery',            icon: '📦',  name: 'Delivery windows',     kind: 'penalty' },
-    { id: 'nightnetwork',        icon: '🌙',  name: 'Night network',        kind: 'penalty' },
-    { id: 'manual_adjustment',   icon: '✋',  name: 'Manual override',      kind: 'penalty' },
-  ];
-
-  const activated = new Set(HEURISTICS_METADATA.map(h => h.id));
 
   const state = {
     vehicle: 'car',
@@ -64,47 +29,17 @@ const Sidebar = (() => {
     return e;
   }
 
-  /* ----- render heuristic list ----- */
-  function renderHeuristicList() {
-    const host = document.getElementById('heuristic-list');
-    while (host.firstChild) host.removeChild(host.firstChild);
 
-    HEURISTICS_METADATA.forEach(h => {
-      const iconSpan = el('span', { cls: 'h-icon', text: h.icon });
-      const nameSpan = el('span', { cls: 'h-name', text: h.name });
-      const weightSpan = el('span', { cls: 'h-weight', text: activated.has(h.id) ? 'ON' : 'off' });
-      const row = el('div',
-        { cls: 'heuristic-item' + (activated.has(h.id) ? ' active' : ''), data: { id: h.id } },
-        [iconSpan, nameSpan, weightSpan],
-      );
-      row.addEventListener('click', () => {
-        if (activated.has(h.id)) activated.delete(h.id); else activated.add(h.id);
-        row.classList.toggle('active');
-        weightSpan.textContent = activated.has(h.id) ? 'ON' : 'off';
-        updateHeuristicCount();
-      });
-      host.appendChild(row);
-    });
-    updateHeuristicCount();
-  }
-
-  function updateHeuristicCount() {
-    const n = activated.size;
-    document.getElementById('heuristic-count').textContent = String(n);
-    document.getElementById('heuristic-sub-count').textContent =
-      `${n} / ${HEURISTICS_METADATA.length} active`;
-  }
-
-  function bindEnableAllButtons() {
-    document.getElementById('btn-enable-all').addEventListener('click', () => {
-      HEURISTICS_METADATA.forEach(h => activated.add(h.id));
-      renderHeuristicList();
-    });
-    document.getElementById('btn-disable-all').addEventListener('click', () => {
-      activated.clear();
-      renderHeuristicList();
-    });
-  }
+  const WEATHER_CAPTIONS = {
+    clear:        '×1.00 — No penalty. Base Haversine distance only. Click Find Routes to compare.',
+    cloudy:       '×1.10 — Mild overcast slowdown on all roads. Click Find Routes to activate.',
+    fog:          '×1.30 + visibility penalty. Roads under 3 km sight penalized. Click Find Routes to activate.',
+    light_rain:   '×1.25 — Cyclists, walkers & e-scooters get ×1.30 extra penalty. Click Find Routes to activate.',
+    rain:         '×1.50 — Tram track edges become ×1.70 for cyclists in wet. Click Find Routes to activate.',
+    thunderstorm: '×1.60 base — Walkers ×2.30, cyclists ×2.20. Heaviest exposed-vehicle penalty. Click Find Routes to activate.',
+    light_snow:   '×1.40 — Snow priority heuristic activates. Non-priority roads penalized ×1.60. Click Find Routes to activate.',
+    heavy_snow:   '×1.80 — All snow penalties stack. Auto-infers black ice if temp < 2°C & humidity > 80%. Click Find Routes to activate.',
+  };
 
   /* ----- vehicle/profile/weather selectors ----- */
   function bindSelectorGroup(containerId, attr, key) {
@@ -116,6 +51,10 @@ const Sidebar = (() => {
       group.querySelectorAll(`[data-${attr}]`).forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state[key] = btn.dataset[attr];
+      if (attr === 'weather') {
+        const cap = document.getElementById('weather-caption');
+        if (cap) cap.textContent = WEATHER_CAPTIONS[btn.dataset[attr]] || '';
+      }
     });
   }
 
@@ -174,7 +113,7 @@ const Sidebar = (() => {
       hour: state.hour, minute: state.minute,
       day_of_week: state.day_of_week, month: state.month,
       date: state.date,
-      enabled_heuristics: Array.from(activated),
+      enabled_heuristics: [],
     };
   }
 
@@ -186,14 +125,14 @@ const Sidebar = (() => {
     bindSelectorGroup('vehicle-selector', 'vehicle', 'vehicle');
     bindSelectorGroup('weather-selector', 'weather', 'weather');
     bindConditionSliders();
-    renderHeuristicList();
-    bindEnableAllButtons();
     // Always advanced mode — make all advanced-only panels visible
     document.body.classList.add('advanced-mode');
+    // Set initial caption for default weather (clear)
+    const cap = document.getElementById('weather-caption');
+    if (cap) cap.textContent = WEATHER_CAPTIONS[state.weather] || '';
   }
 
   return {
     init, setStart, setGoal, buildRequest, state,
-    HEURISTICS_METADATA, activated,
   };
 })();

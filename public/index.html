@@ -27,9 +27,6 @@
       </button>
     </div>
     <div class="topbar-right">
-      <span id="heuristic-count-badge" class="heuristic-badge" title="Active heuristics">
-        <span id="heuristic-count">0</span> heuristics
-      </span>
     </div>
   </header>
 
@@ -95,32 +92,9 @@
               <button class="weather-btn" data-weather="light_snow">🌨️<br><small>Light Snow</small></button>
               <button class="weather-btn" data-weather="heavy_snow">❄️<br><small>Blizzard</small></button>
             </div>
+            <div id="weather-caption" class="weather-caption"></div>
           </div>
         </section>
-
-        <section class="panel advanced-only" id="panel-heuristics">
-          <div class="panel-header collapsible open" data-target="heuristics-body">
-            ⚙️ Heuristics
-            <span class="heuristic-sub-count" id="heuristic-sub-count">0 / 22 active</span>
-            <span class="chevron">›</span>
-          </div>
-          <div id="heuristics-body" class="panel-body">
-            <div class="heuristic-actions">
-              <button class="btn-ghost small" id="btn-enable-all">Enable All</button>
-              <button class="btn-ghost small" id="btn-disable-all">Disable All</button>
-            </div>
-            <div id="heuristic-list" class="heuristic-list"></div>
-
-            <div class="weight-breakdown" id="weight-breakdown">
-              <div class="panel-header small">Live Weight Breakdown</div>
-              <div id="weight-bars"></div>
-              <div class="composite-row">
-                Composite multiplier: <strong id="composite-mult">×1.0</strong>
-              </div>
-            </div>
-          </div>
-        </section>
-
 
         <section class="panel" id="panel-traffic">
           <div class="panel-header collapsible" data-target="traffic-body">

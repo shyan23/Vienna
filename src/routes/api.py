@@ -183,10 +183,12 @@ async def edges_by_name(body: dict):
     for edge in g["edges"]:
         name = edge.get("name", "")
         if name in street_names:
-            eid = f'{edge["from"]}_{edge["to"]}'
-            if eid not in seen:
-                seen.add(eid)
-                result.append(eid)
+            fwd = f'{edge["from"]}_{edge["to"]}'
+            rev = f'{edge["to"]}_{edge["from"]}'
+            for eid in (fwd, rev):
+                if eid not in seen:
+                    seen.add(eid)
+                    result.append(eid)
     return result
 
 

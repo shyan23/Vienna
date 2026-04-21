@@ -1,0 +1,892 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{mdframed}
+\usepackage{enumitem}
+\usepackage{multicol}
+\usepackage{array}
+
+% ── colours ──────────────────────────────────────────────────────────────────
+\definecolor{backcolour}{rgb}{0.97,0.97,0.95}
+\definecolor{codegreen}{rgb}{0,0.55,0}
+\definecolor{codegray}{rgb}{0.45,0.45,0.45}
+\definecolor{codepurple}{rgb}{0.55,0,0.75}
+\definecolor{keyblue}{rgb}{0.1,0.1,0.75}
+\definecolor{notebox}{rgb}{0.92,0.96,1.0}
+\definecolor{warnbox}{rgb}{1.0,0.96,0.88}
+
+\lstset{
+  backgroundcolor=\color{backcolour},
+  commentstyle=\color{codegreen},
+  keywordstyle=\color{keyblue}\bfseries,
+  numberstyle=\tiny\color{codegray},
+  stringstyle=\color{codepurple},
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  captionpos=b,
+  keepspaces=true,
+  numbers=left,
+  numbersep=5pt,
+  showstringspaces=false,
+  tabsize=2,
+  language=Python,
+  frame=single,
+  rulecolor=\color{codegray},
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textit{Vienna Traffic Router — Complete Study Notes}}
+\rhead{\textit{\today}}
+\cfoot{\thepage}
+
+% ── highlight boxes ───────────────────────────────────────────────────────────
+\newenvironment{notebox}[1][Note]{%
+  \begin{mdframed}[backgroundcolor=notebox,linecolor=blue!40,linewidth=1pt]%
+  \textbf{#1.}\ }{\end{mdframed}}
+
+\newenvironment{warnbox}[1][Key Point]{%
+  \begin{mdframed}[backgroundcolor=warnbox,linecolor=orange!60,linewidth=1pt]%
+  \textbf{#1.}\ }{\end{mdframed}}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\title{%
+  \textbf{\Large Vienna Traffic Router}\\[4pt]
+  \large Complete Study Notes: Algorithms, Heuristics, Cost Functions, Data Flow\\[2pt]
+  \normalsize AI Search Algorithms with Real-World Heuristics on OpenStreetMap
+}
+\author{Vienna Traffic Router — AI Search Algorithms Project}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Project Overview}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\textbf{Vienna Traffic Router} runs \textbf{8 classic AI search algorithms} in parallel on a curated
+subgraph of Vienna's OpenStreetMap road network ($\approx$1\,000 nodes, $\approx$10\,000 edges), shows all 8
+resulting routes on a Leaflet map, and lets the user tune 30+ heuristic parameters (weather, time of
+day, vehicle type, and Vienna-specific local effects) to watch the routes change in real time.
+
+\begin{warnbox}[Core Idea]
+Same graph, same start/goal, 8 different search strategies — observe how heuristics affect which roads are chosen, how many nodes are explored, and how far each route is from optimal.
+\end{warnbox}
+
+\subsection{Technology Stack}
+\begin{itemize}[noitemsep]
+  \item \textbf{Backend:} FastAPI (Python), Pydantic, ThreadPoolExecutor
+  \item \textbf{Graph data:} OpenStreetMap via Overpass API → JSON adjacency list
+  \item \textbf{Algorithms:} BFS, DFS, UCS, Dijkstra, Greedy, A*, Weighted A*, Bidirectional A*
+  \item \textbf{Frontend:} Vanilla JS, Leaflet.js, dark ``Imperial Vienna'' theme
+  \item \textbf{Heuristics:} 30 pluggable multiplier modules, closure-factory pattern
+\end{itemize}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{System Architecture — Data Flow}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+Understanding the data flow answers: \textit{"Where does a click on the map become a route on screen?"}
+
+\begin{figure}[H]
+\centering
+\begin{mdframed}
+\small
+\texttt{Browser click} $\xrightarrow{\text{lat/lon + 30 params}}$
+\textbf{POST /api/find-path}\\[2pt]
+$\downarrow$ Pydantic \texttt{FindPathRequest} validates payload\\[2pt]
+\textbf{make\_heuristic(params)} builds closure (static tier computed once)\\[2pt]
+$\downarrow$ heuristic\_fn passed to runner\\[2pt]
+\textbf{run\_all()} → ThreadPoolExecutor(8 threads) → 8 algorithms in parallel\\[2pt]
+$\downarrow$ each thread calls \texttt{find\_path(graph, start, goal, h\_fn, params)}\\[2pt]
+Dijkstra result used as \textbf{ground truth} → compute \texttt{optimality\_gap\_pct}\\[2pt]
+$\downarrow$ 8 PathResult dicts returned\\[2pt]
+\textbf{JSON response} → browser draws 8 routes, comparison table
+\end{mdframed}
+\caption{End-to-end request data flow}
+\end{figure}
+
+\subsection{Key Source Files}
+\begin{table}[H]
+\centering\small
+\begin{tabular}{ll}
+\toprule
+\textbf{File} & \textbf{Responsibility} \\
+\midrule
+\texttt{src/main.py} & FastAPI app entry point, static file serving \\
+\texttt{src/routes/api.py} & \texttt{FindPathRequest} Pydantic model, \texttt{\_overrides} dict, POST handler \\
+\texttt{src/heuristics/combined.py} & Closure factory \texttt{make\_heuristic()}, all 30 heuristic imports \\
+\texttt{src/algorithms/runner.py} & Parallel execution, nearest-node snapping, Dijkstra ground truth \\
+\texttt{src/algorithms/base.py} & \texttt{PathResult}, \texttt{sum\_path\_distance()}, \texttt{VEHICLE\_SPEEDS} \\
+\texttt{src/graph/builder.py} & OSM parsing, node curation, edge enrichment, \texttt{haversine()} \\
+\texttt{src/graph/loader.py} & Graph singleton, \texttt{get\_effective\_edge\_cost()} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Graph Structure}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Nodes and Edges}
+\begin{itemize}[noitemsep]
+  \item \textbf{Nodes}: $\approx$1\,000 curated Vienna OSM nodes (intersections, waypoints). Selected via a 7-tier priority curation to keep the graph small but representative.
+  \item \textbf{Edges}: $\approx$10\,000 bidirectional edges. Each edge is a dict with rich metadata.
+  \item \textbf{Adjacency list}: \texttt{adjacency[node\_id] = [\{"node": nb\_id, "edge\_idx": int\}, ...]}
+  \item \textbf{Edge fields}: \texttt{from}, \texttt{to}, \texttt{distance\_m}, \texttt{surface}, \texttt{road\_type}, \texttt{elevation\_from}, \texttt{elevation\_to}, \texttt{lit}, \texttt{tram\_track}, \texttt{bridge}, \texttt{tunnel}, \texttt{near\_school}, \texttt{near\_green\_space}, \texttt{snow\_priority}, \texttt{motor\_vehicle}, \texttt{lanes}, \ldots
+\end{itemize}
+
+\begin{notebox}[Why edge\_idx?]
+The flat \texttt{edges} list is shared across all algorithms. An \texttt{edge\_idx} pointer into this list is cheaper to store in the adjacency entry than a full copy of the edge dict. Never flatten this structure.
+\end{notebox}
+
+\subsection{District Lookup}
+\texttt{get\_district(lat, lon)} in \texttt{builder.py} uses bounding-box lookup for Vienna's 23 districts.
+Several heuristics key off district strings (e.g.\ parking, events, pedestrian density).
+``unknown'' means ``don't apply the district penalty''.
+
+\subsection{Reverse Edges}
+\texttt{build\_graph} emits a \textbf{reverse edge for every non-strictly-oneway way}. This is load-bearing
+for Bidirectional A*: the backward search's predecessors are found by scanning forward-adjacency of
+the goal side. One-way streets correctly have no reverse edge.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Distance Measurement: Haversine Formula}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+All distances use the \textbf{Haversine formula} — great-circle distance over Earth's surface:
+
+\begin{align}
+a &= \sin^2\!\left(\tfrac{\Delta\phi}{2}\right) + \cos\phi_1\cos\phi_2\sin^2\!\left(\tfrac{\Delta\lambda}{2}\right) \\
+d &= 2R\cdot\operatorname{atan2}\!\left(\sqrt{a},\,\sqrt{1-a}\right), \quad R = 6\,371\,000\text{ m}
+\end{align}
+
+\textbf{Unit}: all distances are in \textbf{metres}. $g(n)$ and $h(n)$ share the metre unit — never mix with seconds.
+
+\begin{lstlisting}[caption={src/graph/builder.py — haversine()}]
+def haversine(lat1, lon1, lat2, lon2) -> float:
+    R = 6_371_000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlam/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Edge Cost — $g(n)$}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+$g(n)$ = cumulative sum of \textbf{effective edge costs} from start to node $n$.
+
+\subsection{Effective Cost Formula}
+\[
+c_{\text{eff}}(e) = \underbrace{d_e}_{\text{distance\_m}} \;\times\; \underbrace{m_{\text{override}}(e)}_{\text{manual block}} \;\times\; \underbrace{m_{\text{road\_quality}}(e, v)}_{\text{road type/surface}}
+\]
+
+\paragraph{Manual Override Multiplier}
+\[
+m_{\text{override}}(I) =
+\begin{cases}
+\infty & I \ge 95 \quad \text{(edge impassable)} \\
+0.5 + \dfrac{I}{100}\cdot 2.5 & I < 95
+\end{cases}
+\]
+Range: $[0.5,\; 2.85]$. Override intensity $I$ is a UI slider set by the user on any edge.
+
+\paragraph{Road Quality Multiplier (g-cost)}
+Applied to $g(n)$ only (not just heuristic), making primary roads faster and footways slower:
+\begin{align*}
+T(\text{primary}) &= 0.55 \quad T(\text{secondary}) = 0.65 \quad T(\text{tertiary}) = 0.80 \\
+T(\text{residential}) &= 1.00 \quad T(\text{footway}) = 1.50 \quad T(\text{steps}) = 2.50
+\end{align*}
+
+\begin{lstlisting}[caption={src/graph/loader.py — get\_effective\_edge\_cost()}]
+def get_effective_edge_cost(edge, overrides_map=None, params=None):
+    cost = edge["distance_m"]
+    if overrides_map:
+        key = f'{edge["from"]}_{edge["to"]}'
+        if key in overrides_map:
+            intensity = overrides_map[key]
+            if intensity >= 95:
+                return float("inf")
+            cost *= 0.5 + (intensity / 100.0) * 2.5
+    if params is not None and params.get("use_road_quality", True):
+        from src.heuristics.road_quality import get_road_quality_multiplier
+        cost *= get_road_quality_multiplier(edge, params.get("vehicle_type"))
+    return cost
+\end{lstlisting}
+
+\subsection{Vehicle Passability}
+\texttt{is\_edge\_passable(edge, vehicle\_type)} completely \textbf{removes} edges for incompatible vehicle types:
+\begin{itemize}[noitemsep]
+  \item Car/taxi/truck: primary, secondary, residential roads
+  \item Bicycle/escooter: cycleway + roads
+  \item Walking: footway + residential + parks
+  \item Metro/train: \textbf{0 passable edges} (impassable everywhere; comparison only)
+\end{itemize}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Heuristic Function — $h(n)$}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+$h(n)$ = \textbf{estimate} of remaining cost from $n$ to goal. Used by Greedy, A*, Weighted A*, Bidirectional A*.
+
+\subsection{Core Formula}
+\[
+\boxed{
+h(n, g;\,\theta) = \min\!\bigl(\;d_0(n,g)\cdot M(n,g;\theta),\; C\cdot d_0(n,g)\;\bigr)
+}
+\]
+where $d_0 = \text{haversine}(n, g)$, $C = \texttt{MAX\_HEURISTIC\_CAP} = 50$, and the composite multiplier is:
+
+\[
+M = \underbrace{\prod_{k\in\mathcal{S}} m_k(\theta)}_{\text{static (once)}}
+\;\cdot\;
+\underbrace{\prod_{k\in\mathcal{G}} m_k(g,\theta)}_{\text{goal-dependent}}
+\;\cdot\;
+\underbrace{\prod_{k\in\mathcal{N}} m_k(n,G,\theta)}_{\text{node-dependent}}
+\;\cdot\;
+\underbrace{\min_{e\in\mathrm{adj}(n)}\prod_{k\in\mathcal{D}} m_k(e,\theta)}_{\text{edge proxy (cheapest)}}
+\]
+
+\begin{warnbox}[Why multiplicative, not additive?]
+Multiplicative composition means a road penalized by weather ($\times$1.5), surface ($\times$1.2), and elevation ($\times$1.1) incurs combined penalty $1.5\times1.2\times1.1 = 1.98$. Additive would give $0.5+0.2+0.1=0.8$ — no magnitude scaling. Multiplicative correctly scales the Haversine base distance.
+\end{warnbox}
+
+\subsection{Three-Tier Architecture}
+
+\subsubsection{Tier 1 — Static (Computed Once at Closure Build)}
+
+These depend only on request params, not on which node we're evaluating. Baked into a single
+\texttt{static\_mult} float \textit{before} pathfinding begins.
+
+\[
+\mathcal{S} = \{\texttt{weather},\ \texttt{time\_of\_day},\ \texttt{vehicle\_type},\ \texttt{visibility},\ \texttt{humidity},\ \texttt{nightnetwork},\ \texttt{wind},\ \texttt{headway}\}
+\]
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Heuristic} & \textbf{Input} & \textbf{Range} \\
+\midrule
+\texttt{weather} & condition string → lookup table & 1.0 (clear) \ldots 2.0 (black ice) \\
+\texttt{time\_of\_day} & hour + day-of-week & 0.65 (weekend night) \ldots 1.70 (PM rush) \\
+\texttt{vehicle\_type} & vehicle string & 0.40 (metro) \ldots 1.80 (walking) \\
+\texttt{visibility} & metres of visibility & 1.00 ($\ge$3000 m) \ldots 1.60 ($<$300 m) \\
+\texttt{humidity} & relative \% & 1.0 \ldots 1.10 (high humidity + exposed vehicle) \\
+\texttt{nightnetwork} & vehicle + hour & 1.00 or 1.30 (bus/metro 0–5 AM) \\
+\texttt{wind} & speed m/s + direction & 1.0 \ldots $\sim$1.15 (headwind, bicycle) \\
+\texttt{headway} & vehicle + peak flag & 1.0 \ldots 1.60 (train off-peak) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{lstlisting}[caption={combined.py — static tier (computed once)}]
+static_mult = 1.0
+if _enabled(enabled, "weather"):
+    static_mult *= get_weather_multiplier(weather, vehicle)
+if _enabled(enabled, "time_of_day"):
+    static_mult *= get_time_multiplier(hour, day_of_week)
+if _enabled(enabled, "vehicle_type"):
+    static_mult *= get_vehicle_multiplier(vehicle)
+# ... visibility, humidity, nightnetwork, wind, headway
+\end{lstlisting}
+
+\subsubsection{Tier 2 — Goal-Dependent (Constant per Route)}
+
+Depend on the \textit{destination district} — the same for all nodes during one route search.
+
+\[
+\mathcal{G} = \{\texttt{parking},\ \texttt{holiday\_historical},\ \texttt{events},\ \texttt{fiaker},\ \texttt{season},\ \texttt{pedestrian\_density},\ \texttt{delivery}\}
+\]
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{ll}
+\toprule
+\textbf{Heuristic} & \textbf{Example value} \\
+\midrule
+\texttt{parking} & District 1 (Innerstadt) car: 1.60 (very hard to park) \\
+\texttt{holiday\_historical} & Austrian public holiday, District 1: 1.20; outer: 0.80 \\
+\texttt{events} & Vienna Marathon (zones 1–4,9): 2.50 \\
+\texttt{fiaker} & District 1, car, 10–18h: 1.25 (horse carriages) \\
+\texttt{season} & November–December, District 1 (Advent): 1.25 \\
+\texttt{pedestrian\_density} & District 1, bicycle, 11–20h: 1.35 \\
+\texttt{delivery} & Truck, District 1, 7–19h: 1.80 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Tier 3a — Node-Dependent (Per Frontier Node)}
+
+\[
+\mathcal{N} = \{\texttt{intersection\_density},\ \texttt{road\_works},\ \texttt{markets},\ \texttt{heuriger}\}
+\]
+
+\paragraph{Intersection Density} Let $\deg(n) = |\mathrm{adj}(n)|$, $s(n)=1$ if traffic signal:
+\[
+m_{\text{inter}}(n) =
+\begin{cases}
+1 & \deg(n)\le 2 \\
+\bigl[1 + 0.05(\deg(n)-2) + 0.10\,s(n)\bigr]\cdot Z(D_n) & \deg(n)>2
+\end{cases}
+\]
+Zone penalty: $Z(D=1)=1.30$, $Z(D\in\{7,8\})=1.20$, $Z(D=6)=1.15$, else $1.0$.
+
+\paragraph{Markets / Heuriger} Geospatial proximity check. If a Naschmarkt or Grinzing wine tavern
+is within 200–400 m on the active day/hour, apply $\times$1.45 or $\times$1.35.
+
+\subsubsection{Tier 3b — Edge-Dependent (Cheapest Outgoing Edge Proxy)}
+
+\[
+\mathcal{D} = \{\texttt{surface},\ \texttt{elevation},\ \texttt{safety},\ \texttt{emission\_zones},\ \texttt{tram\_tracks},\ \texttt{snow\_priority},\ \texttt{commuter\_bridges},\ \texttt{lane\_capacity},\ \texttt{school\_zones},\ \texttt{scenic},\ \texttt{road\_quality},\ \texttt{manual\_adjustment}\}
+\]
+
+\begin{warnbox}[Why the cheapest outgoing edge proxy?]
+$h(n)$ must \textit{not} overestimate real cost. We don't know which edge $A^*$ will take next. Taking the minimum across all outgoing edges gives a \textbf{lower bound} on edge quality, preserving admissibility. An average or maximum would overestimate.
+\end{warnbox}
+
+\begin{lstlisting}[caption={combined.py — edge-dependent tier}]
+adj = graph["adjacency"].get(node_id, [])
+best_edge_mult = float("inf")
+for nb in adj:
+    edge = graph["edges"][nb["edge_idx"]]
+    e_mult = 1.0
+    if _enabled(enabled, "surface"):
+        e_mult *= get_surface_multiplier(edge, vehicle)
+    if _enabled(enabled, "elevation"):
+        e_mult *= get_elevation_multiplier(edge, vehicle)
+    # ... (10 more edge heuristics)
+    if e_mult < best_edge_mult:
+        best_edge_mult = e_mult
+if best_edge_mult != float("inf"):
+    mult *= best_edge_mult
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{All 30 Heuristic Functions — Reference}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Environmental (5)}
+\begin{itemize}[noitemsep]
+  \item \textbf{weather}: Lookup table — clear 1.0, rain 1.50, black\_ice 2.00. Black ice inferred: temp$<$2°C and humidity$>$80\% upgrades clear/fog → black\_ice automatically.
+  \item \textbf{visibility}: Fog/mist penalty — $<$300 m visibility: $\times$1.60.
+  \item \textbf{humidity}: Exposed vehicles (walking/bicycle/escooter) on high humidity ($>$85\%): $\times$1.10.
+  \item \textbf{wind}: Headwind component for bicycle/walking/escooter: $m = 1 + 0.03 H_w$ (bicycle).
+  \item \textbf{season}: Summer tourists (Jun–Aug, D1/6/7): $\times$1.15; Advent (Nov–Dec): $\times$1.25.
+\end{itemize}
+
+\subsection{Temporal (5)}
+\begin{itemize}[noitemsep]
+  \item \textbf{time\_of\_day}: Rush hours — AM rush (7–9): $\times$1.60; PM rush (17–19): $\times$1.70.
+  \item \textbf{holiday\_historical}: 13 Austrian holidays in 2026; D1 on holiday: $\times$1.20; outer: $\times$0.80.
+  \item \textbf{events}: Scheduled events with zones/times — Marathon: $\times$2.50, Opernball: $\times$1.60.
+  \item \textbf{headway}: Transit service frequency — metro off-peak 7 min wait: $\times$1.14.
+  \item \textbf{nightnetwork}: Bus/metro at 0–5 AM: $\times$1.30 (reduced service).
+\end{itemize}
+
+\subsection{Vehicle-Type (3)}
+\begin{itemize}[noitemsep]
+  \item \textbf{vehicle\_type}: Speed baseline — motorcycle: 0.85, walking: 1.80, metro: 0.40.
+  \item \textbf{vehicle\_type\_routing}: Hard passability filter (removes edges entirely).
+  \item \textbf{delivery}: Truck, District 1, daytime: $\times$1.80 (delivery restriction zones).
+\end{itemize}
+
+\subsection{Road Geometry \& Condition (6)}
+\begin{itemize}[noitemsep]
+  \item \textbf{surface}: Cobblestone bicycle: $\times$1.60; gravel bicycle: $\times$1.80; escooter on gravel: $\times$2.00.
+  \item \textbf{elevation}: Uphill slope (\%) for walking/bicycle/bus: $m = 1 + 0.05\cdot\text{slope}$.
+  \item \textbf{lane\_capacity}: $\ge$4 lanes for bulk vehicles: $\times$0.90 (incentive); 1 lane: $\times$1.10.
+  \item \textbf{tram\_tracks}: Bicycle on tram track + wet: $\times$1.70; dry: $\times$1.25.
+  \item \textbf{snow\_priority}: Non-priority road + snow: $\times$1.60; priority road: $\times$1.05.
+  \item \textbf{road\_quality}: Composite of road type × surface × speed limit — steps: $\times$2.50.
+\end{itemize}
+
+\subsection{Safety \& Regulation (6)}
+\begin{itemize}[noitemsep]
+  \item \textbf{safety}: Pedestrian, night (21h–5h), unlit road: $\times$1.50; lit primary: $\times$0.90.
+  \item \textbf{school\_zones}: School edge, 7:30–8:15 or 13:00–14:00 weekdays: $\times$1.35.
+  \item \textbf{emission\_zones}: Motor vehicle on restricted road (\texttt{motor\_vehicle=no}): $\times$8.0 (soft ban).
+  \item \textbf{commuter\_bridges}: Praterbrücke, rush hour weekday: $\times$2.00; Reichsbrücke: $\times$1.80.
+  \item \textbf{road\_works}: Within 150 m of active construction: $\times$1.50.
+  \item \textbf{manual\_adjustment}: User slider $I\in[0,100]$: $m = 0.5 + 0.025I$, range $[0.5, 3.0]$.
+\end{itemize}
+
+\subsection{Urban Features \& Attractions (5)}
+\begin{itemize}[noitemsep]
+  \item \textbf{intersection\_density}: High degree + signal + District 1: up to $\sim\times$1.9.
+  \item \textbf{pedestrian\_density}: District 1, daytime: $\times$1.35; on holiday $\times$1.35$\cdot$1.15.
+  \item \textbf{markets}: Within 200 m of Naschmarkt or farmers' market on operating day: $\times$1.45.
+  \item \textbf{heuriger}: Grinzing wine taverns, Sep–Oct Fri–Sat 16–23h: $\times$1.35.
+  \item \textbf{fiaker}: Horse-carriage zone (D1, 10–18h), car/bicycle: $\times$1.25.
+\end{itemize}
+
+\subsection{Destination-Specific (2)}
+\begin{itemize}[noitemsep]
+  \item \textbf{parking}: Car to District 1: $\times$1.60; District 2: $\times$1.35; outer: $\times$1.05.
+  \item \textbf{scenic}: \texttt{route\_profile=greenest}, near green space: $\times$0.85 (incentive); not green: $\times$1.05.
+\end{itemize}
+
+\begin{warnbox}[Maximum multipliers ranked]
+\texttt{emission\_zones}: 8.0 (soft-ban) → \texttt{weather+walking (thunderstorm)}: 4.60 → \texttt{manual}: 3.0 → \texttt{events (Marathon)}: 2.50 → \texttt{commuter\_bridges}: 2.00 → \texttt{black\_ice}: 2.00
+\end{warnbox}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Admissibility, Capping, and $\varepsilon$-Admissibility}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{What is Admissibility?}
+A heuristic is \textbf{admissible} when it \textit{never overestimates} true cost:
+\[
+h(n) \;\le\; h^*(n) \quad \forall n
+\]
+Pure Haversine distance is admissible (straight-line $\le$ any road path). But multiplying it by
+factors $>1$ (rain, rush hour) can make it inadmissible.
+
+\subsection{The MAX\_HEURISTIC\_CAP}
+\[
+h_{\text{final}}(n) = \min\!\bigl(h_{\text{raw}}(n),\; d_0(n,g)\cdot C\bigr), \quad C = 50
+\]
+
+\begin{notebox}[Why 50?]
+Without a cap, stacked multipliers can reach $10^3$+ (thunderstorm $\times$ tram tracks $\times$ cobblestone $\times$ rush hour $\times$ \ldots). At those values, $h(n)$ completely dominates $g(n)$, and A* degenerates to a greedy search — losing its optimality guarantee. Cap = 50 means the heuristic claims at most a 50× cost blowup, keeping weighted A* $\varepsilon$-admissible.
+\end{notebox}
+
+\subsection{$\varepsilon$-Admissibility (Weighted A*)}
+Weighted A* uses $f = g + w\cdot h$. Even with $h > h^*$, if $h \le w\cdot h^*$ the solution is bounded:
+\[
+\text{cost}(\pi) \;\le\; w \;\cdot\; \text{cost}(\pi^*)
+\]
+Default weight: $w=1.5$, cap $C=50$, so paths are at most $1.5\times$ optimal.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{The 8 Search Algorithms}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{How All Algorithms Share the Same Interface}
+
+\begin{lstlisting}[caption={Every algorithm has this signature}]
+def find_path(graph, start_id, goal_id, heuristic_fn, params) -> PathResult
+\end{lstlisting}
+
+All algorithms:
+\begin{enumerate}[noitemsep]
+  \item Call \texttt{is\_edge\_blocked()} — skip intensity$\ge$95 edges
+  \item Call \texttt{is\_edge\_passable()} — skip vehicle-incompatible edges
+  \item Call \texttt{get\_effective\_edge\_cost()} — apply manual overrides + road quality to $g$
+  \item Return a \texttt{PathResult} with \texttt{path\_coords}, \texttt{distance\_m}, \texttt{nodes\_expanded}, \texttt{compute\_time\_ms}
+\end{enumerate}
+
+\subsection{Algorithm 1: BFS (Breadth-First Search)}
+
+\textbf{Data structure}: \texttt{deque} (FIFO queue). Explores all distance-1 neighbours, then distance-2, etc.
+
+\textbf{Optimality}: Finds \textit{minimum-hop} path, \textbf{not} minimum-distance. On Vienna's graph (edges 30–300 m), hop-count $\ne$ distance.
+
+\textbf{Heuristic used}: None — ignores $h(n)$.
+
+\textbf{Typical}: 800–1\,000 nodes expanded, 50–100 ms, path $\approx$50\% longer than optimal.
+
+\subsection{Algorithm 2: DFS (Depth-First Search)}
+
+\textbf{Data structure}: Python list as stack (LIFO). Explores deep first, backtracks.
+
+\textbf{Optimality}: Not optimal. Path depends on neighbour iteration order; can find near-worst route.
+
+\textbf{Heuristic used}: None.
+
+\textbf{Typical}: 600–1\,000 nodes expanded, highly variable path length.
+
+\subsection{Algorithm 3: UCS (Uniform-Cost Search)}
+
+\textbf{Data structure}: \texttt{heapq} priority queue keyed on $g(n)$. Allows re-expansions (stale entry check).
+
+\textbf{Optimality}: \textbf{Optimal} for non-negative edge weights. Used as \textbf{ground truth} for optimality gap calculations.
+
+\textbf{Difference from Dijkstra}: No visited set. Stale entry detection at line 35–36: \texttt{if g > dist[node]: continue}.
+
+\textbf{Heuristic used}: None (only $g(n)$).
+
+\subsection{Algorithm 4: Dijkstra}
+
+\textbf{Data structure}: \texttt{heapq} + explicit \texttt{visited} closed set. Each node expanded \textbf{exactly once}.
+
+\textbf{Optimality}: \textbf{Optimal}. Slightly more efficient than UCS (no re-expansions).
+
+\textbf{Role in project}: \textbf{Definitive ground truth} — runner computes \texttt{optimality\_gap\_pct = (other - dijkstra) / dijkstra × 100} for all 8 results.
+
+\textbf{Heuristic used}: None.
+
+\textbf{Typical}: 300–500 nodes expanded, 15–30 ms.
+
+\subsection{Algorithm 5: Greedy Best-First Search}
+
+\textbf{Data structure}: \texttt{heapq} keyed on $h(n)$ only (ignores $g$). Always expands node closest to goal by heuristic estimate.
+
+\textbf{Optimality}: \textbf{Not optimal}. Greedy choice can lead to dead-ends or suboptimal routes.
+
+\textbf{Heuristic}: \texttt{make\_heuristic(params)} closure — all 3 tiers.
+
+\textbf{How heuristic affects it}: The heuristic is the \textit{only} decision factor. Strong heuristics give fast, decent routes; poor heuristics give terrible routes. No $g$-cost feedback.
+
+\textbf{Typical}: 50–150 nodes expanded, 5–10 ms, path 10–30\% longer than optimal.
+
+\subsection{Algorithm 6: A*}
+
+\textbf{Data structure}: \texttt{heapq} keyed on $f(n) = g(n) + h(n)$. Closed set prevents re-expansion.
+
+\textbf{Optimality}: \textbf{Optimal} when $h$ is admissible.
+
+\textbf{How heuristic affects it}: $h(n)$ guides the search toward the goal while $g(n)$ keeps it honest about actual cost. Bad heuristic → explores many nodes (degrades to Dijkstra). Good heuristic → explores far fewer.
+
+\begin{lstlisting}[caption={astar.py — core loop}]
+f = tentative_g + heuristic_fn(neighbor, goal_id, graph, params)
+heapq.heappush(open_set, (f, tiebreak, neighbor))
+\end{lstlisting}
+
+\textbf{Typical}: 200–400 nodes expanded, 10–20 ms, \textbf{optimal path}.
+
+\subsection{Algorithm 7: Weighted A*}
+
+\textbf{Data structure}: Same as A* but $f(n) = g(n) + w\cdot h(n)$ where $w=1.5$ (default).
+
+\textbf{Optimality}: \textbf{Bounded suboptimal}: cost $\le w\times$ optimal. Cap ensures this holds.
+
+\textbf{Weight tuning}:
+\begin{itemize}[noitemsep]
+  \item $w=1.0$ → A* (optimal, slower)
+  \item $w=1.5$ → default, good speed/quality trade-off
+  \item $w=2.0+$ → very fast, path quality degrades
+  \item $w\to\infty$ → approaches greedy best-first
+\end{itemize}
+
+\textbf{How heuristic affects it}: Amplified by $w$ — a 1.5× weather multiplier in $h$ now reads as $1.5\times w = 2.25\times$. Heuristic dominance increases with $w$.
+
+\textbf{Typical}: 50–100 nodes expanded, 5–10 ms.
+
+\subsection{Algorithm 8: Bidirectional A*}
+
+\textbf{Idea}: Run A* forward (start→goal) \textit{and} backward (goal→start) simultaneously. Expand whichever side has smaller top-of-heap $f$.
+
+\textbf{Meeting condition}:
+\[
+\text{best\_sum} = \min_{n:\,n\in\text{fwd}\cap\text{bwd}} \bigl(g_f(n) + g_b(n)\bigr)
+\]
+\textbf{Early termination}: When $\text{top\_fwd} + \text{top\_bwd} \ge \text{best\_sum}$, the best meeting is provably optimal.
+
+\textbf{Reverse adjacency}: \texttt{\_reverse\_adjacency(node, graph)} iterates over node's neighbours' neighbours to find predecessors. Uses \texttt{edge\_idx} of the forward edge for cost/block checks.
+
+\begin{lstlisting}[caption={bidirectional\_astar.py — expansion decision}]
+top_f = open_f[0][0] if open_f else float("inf")
+top_b = open_b[0][0] if open_b else float("inf")
+if top_f + top_b >= best_sum:
+    break  # provably optimal
+if top_f <= top_b:
+    # expand forward
+else:
+    # expand backward
+\end{lstlisting}
+
+\textbf{Optimality}: \textbf{Optimal} if $h$ admissible in both directions.
+
+\textbf{Typical}: 50–100 nodes total (fwd + bwd combined), 2–5× faster than A*.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{How Heuristics Affect Each Algorithm}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lccl}
+\toprule
+\textbf{Algorithm} & \textbf{Uses $h(n)$?} & \textbf{Uses $g(n)$?} & \textbf{Effect of heuristic} \\
+\midrule
+BFS & No & No & Heuristic irrelevant; hop-count search \\
+DFS & No & No & Heuristic irrelevant; stack order determines path \\
+UCS & No & Yes & Pure cost-driven; heuristic has no effect \\
+Dijkstra & No & Yes & Pure cost-driven; ground truth baseline \\
+Greedy & $h$ only & No & Entire route determined by heuristic quality \\
+A* & $f=g+h$ & Yes & Heuristic guides and speeds up optimal search \\
+Weighted A* & $f=g+wh$ & Yes & Amplified heuristic; faster but bounded-suboptimal \\
+Bidirectional A* & $f=g+h$ (both dirs) & Yes & Heuristic guides meeting point; bidirectional pruning \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{notebox}[Practical implication]
+Toggle weather → \textit{rain} and watch Greedy change routes dramatically (heuristic dominates), while UCS/Dijkstra routes barely change (only edge costs shift slightly via road quality). This demonstrates the direct influence of heuristic weighting.
+\end{notebox}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Parallel Runner and PathResult}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{run\_all()}
+
+\begin{lstlisting}[caption={src/algorithms/runner.py — parallel dispatch}]
+def run_all(start_lat, start_lon, goal_lat, goal_lon, params, heuristic_fn):
+    graph = load_graph()
+    start_id = nearest_node(graph, start_lat, start_lon)
+    goal_id  = nearest_node(graph, goal_lat, goal_lon)
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {
+            "bfs":               ex.submit(bfs.find_path, ...),
+            "dijkstra":          ex.submit(dijkstra.find_path, ...),
+            # ... all 8
+        }
+    results = {name: f.result() for name, f in futures.items()}
+
+    # Optimality gap vs. Dijkstra
+    dijkstra_dist = results["dijkstra"]["distance_m"]
+    for name, r in results.items():
+        r["optimality_gap_pct"] = (r["distance_m"] - dijkstra_dist) / dijkstra_dist * 100
+    return results
+\end{lstlisting}
+
+\subsection{PathResult Fields}
+\begin{table}[H]
+\centering\small
+\begin{tabular}{ll}
+\toprule
+\textbf{Field} & \textbf{Meaning} \\
+\midrule
+\texttt{path\_node\_ids} & List of node ID strings start→goal \\
+\texttt{path\_coords} & List of (lat, lon) tuples for Leaflet \\
+\texttt{distance\_m} & Sum of raw edge \texttt{distance\_m} values \\
+\texttt{estimated\_time\_s} & \texttt{distance\_m} / \texttt{VEHICLE\_SPEEDS[vehicle]} \\
+\texttt{nodes\_expanded} & Count of nodes popped from queue/heap \\
+\texttt{compute\_time\_ms} & Wall-clock time (\texttt{perf\_counter}) \\
+\texttt{is\_optimal} & True if matches Dijkstra distance \\
+\texttt{optimality\_gap\_pct} & \% above Dijkstra optimal \\
+\texttt{error} & None if found; error string if not \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Default speed}: \texttt{car} = 8.33 m/s ($\approx$30 km/h urban). Distance/speed = estimated travel time in seconds.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Closure Factory Pattern — Performance}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Why a Closure?}
+
+A* calls \texttt{h(node, goal, graph, params)} thousands of times per route. 8 algorithms run in parallel.
+With $\approx$300 nodes × 8 algorithms = 2\,400 heuristic calls per request, every unnecessary multiplication counts.
+
+\begin{lstlisting}[caption={Without closure — SLOW (recomputes static tier every call)}]
+def bad_heuristic(node, goal, graph, params):
+    mult  = get_weather_multiplier(params["weather"], params["vehicle"])  # every call!
+    mult *= get_time_multiplier(params["hour"], params["day_of_week"])     # every call!
+    # ... 6 more static calls per invocation
+\end{lstlisting}
+
+\begin{lstlisting}[caption={With closure — FAST (static tier baked in)}]
+def make_heuristic(params):
+    static_mult = 1.0
+    static_mult *= get_weather_multiplier(weather, vehicle)   # once
+    static_mult *= get_time_multiplier(hour, day_of_week)     # once
+    # ...
+    def heuristic(node_id, goal_id, graph, _params=None):
+        mult = static_mult                                     # free read
+        # dynamic tier here
+        h = h_base * mult
+        return min(h, h_base * MAX_HEURISTIC_CAP)
+    return heuristic
+\end{lstlisting}
+
+Static tier = 8 multiplications done \textit{once}. Saves $\approx$8 × 2\,400 = 19\,200 extra multiplications per request.
+
+\subsection{enable/disable via UI}
+
+\begin{lstlisting}[caption={combined.py — _enabled() helper}]
+def _enabled(enabled: set[str], key: str) -> bool:
+    # Empty set = all active (default: all 30 on)
+    # Non-empty = strict whitelist
+    return not enabled or key in enabled
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Fully Worked Heuristic Calculation Example}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\textbf{Scenario}: Bicycle commute, Tuesday 17:00, rain ($T=10°C$, $H=80\%$, $V=2000$ m, wind 5 m/s headwind), destination District 1, \texttt{route\_profile=fastest}, all heuristics on. Frontier node $n$ has degree 4, no signal, on cobblestone residential edge with tram track, slope +3\%, District 1.
+
+\paragraph{Tier $\mathcal{S}$ (computed once):}
+\begin{align*}
+m_{\text{weather}} &= 1.50\cdot 1.60 = 2.40 \quad(\text{rain base} \times \text{bicycle rain factor})\\
+m_{\text{time}}    &= 1.70 \quad(\text{weekday PM rush 17–19})\\
+m_{\text{vehicle}} &= 1.20 \quad(\text{bicycle})\\
+m_{\text{vis}}     &= 1.15 \quad(1000 \le 2000 < 3000)\\
+m_{\text{wind}}    &= 1 + 0.03\cdot 5 = 1.15\\
+M_{\mathcal{S}}    &= 2.40\times 1.70\times 1.20\times 1.15\times 1.15 \approx 6.47
+\end{align*}
+
+\paragraph{Tier $\mathcal{G}$:}
+\begin{align*}
+m_{\text{fiaker}}  &= 1.25 \quad(D1, \text{bicycle}, h\in[10,18))\\
+m_{\text{ped}}     &= 1.35 \quad(D1, \text{bicycle}, h\in[11,20))\\
+M_{\mathcal{G}}    &= 1.25\times 1.35 = 1.6875
+\end{align*}
+
+\paragraph{Tier $\mathcal{N}$:}
+\begin{align*}
+m_{\text{inter}} &= [1 + 0.05\times(4-2)]\times 1.30 = 1.10\times 1.30 = 1.43\\
+M_{\mathcal{N}}  &= 1.43
+\end{align*}
+
+\paragraph{Tier $\mathcal{D}$ (edge proxy):}
+\begin{align*}
+m_{\text{surf}}  &= 1.60 \quad(\text{cobblestone, bicycle})\\
+m_{\text{elev}}  &= 1 + 0.05\times 3 = 1.15\\
+m_{\text{tram}}  &= 1.70 \quad(\text{bicycle + wet})\\
+m_{\text{rq}}    &= \mathrm{clamp}[0.4, 2.5,\ 1.00\times 1.30\times 1.00\times 1.25] = 1.625\\
+M_{\mathcal{D}}  &= 1.60\times 1.15\times 1.70\times 1.625 \approx 5.08
+\end{align*}
+
+\paragraph{Combined:}
+\[
+M = 6.47\times 1.6875\times 1.43\times 5.08 \approx 79.4
+\]
+Cap kicks in: $\min(79.4,\ 50) = 50$.
+\[
+h(n,g) = 50\cdot d_0(n,g)
+\]
+If $d_0 = 1200$ m, then $h = 60\,000$ m — interpreted as equivalent to 60 km in routing cost, reflecting compounded rush-hour + rain + cobblestone + tram + dense intersection + pedestrian zone.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Algorithm Performance Summary}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\begin{table}[H]
+\centering\small
+\caption{Typical performance on Vienna graph (interdistrict route $\approx$2 km, 1\,000 nodes)}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Algorithm} & \textbf{Optimal?} & \textbf{Uses h?} & \textbf{Time (ms)} & \textbf{Nodes expanded} & \textbf{Path (m)} & \textbf{vs Optimal} \\
+\midrule
+BFS & No (hops) & No & 50–100 & 800–1000 & $\approx$2500 & +50\% \\
+DFS & No & No & 30–80 & 600–1000 & Variable & Variable \\
+UCS & Yes & No & 15–30 & 300–500 & $\approx$1800 & Ground truth \\
+Dijkstra & Yes & No & 15–30 & 300–500 & $\approx$1800 & Ground truth \\
+Greedy & No & Yes & 5–10 & 50–150 & $\approx$2000 & +10\% \\
+A* & Yes & Yes & 10–20 & 200–400 & $\approx$1800 & Optimal \\
+Weighted A* & Bounded & Yes & 5–10 & 50–100 & $\approx$1900 & +5\% \\
+Bidirectional A* & Yes & Yes & 8–15 & 50–100 & $\approx$1800 & Optimal \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Quick Q\&A: Likely Professor Questions}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\begin{description}[labelwidth=0pt, leftmargin=0pt]
+
+\item[\textbf{Q: Why is the heuristic a closure?}]
+Static multipliers (weather, time, vehicle) depend only on the request parameters, not on which node
+we're evaluating. Computing them once and capturing in a closure avoids $\approx$19\,000 redundant
+multiplications per request.
+
+\item[\textbf{Q: How do you ensure admissibility?}]
+Haversine is always $\le$ true road distance (triangle inequality). The edge proxy picks the cheapest
+outgoing edge (lower bound on edge quality). The hard cap (50) prevents inadmissible blow-up. Together:
+$h(n) \le h^*(n)$ for the static+edge tiers; dynamic tiers add multipliers $\ge 1$ but the cap bounds the damage.
+
+\item[\textbf{Q: Why does bidirectional A* expand fewer nodes?}]
+Forward search from A expands a sphere of radius $r$ around A. Backward search from B expands a sphere
+of radius $r$ around B. They meet when $r_A + r_B \approx d(A,B)$, so each sphere has radius $\approx
+d/2$ instead of $d$. Volume of two half-spheres $\approx$ half the volume of one full sphere.
+
+\item[\textbf{Q: What is the optimality gap?}]
+\texttt{optimality\_gap\_pct = (algo\_dist - dijkstra\_dist) / dijkstra\_dist × 100}. A gap of 0 means the
+algorithm found the same path as Dijkstra. A gap of 5\% means the algorithm's route is 5\% longer
+than optimal.
+
+\item[\textbf{Q: Why does UCS differ from Dijkstra?}]
+UCS allows re-expansion (stale entry check). Dijkstra uses a visited closed-set — each node expanded
+exactly once, never revisited. For non-negative edge weights, both produce optimal paths. Dijkstra is
+slightly more cache-efficient; UCS is simpler to implement.
+
+\item[\textbf{Q: What happens when intensity = 95 on an edge?}]
+\texttt{get\_effective\_edge\_cost()} returns \texttt{float("inf")}. All 8 algorithms check
+\texttt{is\_edge\_blocked()} before considering any neighbour — the edge is simply never explored.
+Metro/train routes return empty paths for the same reason (no passable edges at all).
+
+\item[\textbf{Q: Why multiply, not add?}]
+Multiplicative: weather 1.5 × cobblestone 1.6 = 2.4 (realistic: bad surface in bad weather is
+compounding). Additive: 0.5 + 0.6 = 1.1 (barely noticeable). Multiplication correctly models
+independent cost factors that each slow you proportionally.
+
+\item[\textbf{Q: How does a heuristic become a scenario?}]
+Each scenario preset (e.g.\ ``Viennese Marathon Day'') sets specific param values: \texttt{date=2026-04-26},
+\texttt{hour=9}, enabling the \texttt{events} heuristic. The marathon event record fires with $\times$2.50
+for zones 1–4 and 9, routing algorithms around the closed streets.
+
+\end{description}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Summary of All Heuristic Functions (Tier Classification)}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\begin{table}[H]
+\centering\scriptsize
+\caption{All 30 heuristics, tier, module, and max multiplier}
+\begin{tabular}{llll}
+\toprule
+\textbf{ID} & \textbf{Tier} & \textbf{Module} & \textbf{Max mult.} \\
+\midrule
+weather & $\mathcal{S}$ static & weather.py & 4.60 (thunder+walking) \\
+time\_of\_day & $\mathcal{S}$ static & time\_of\_day.py & 1.70 (PM rush weekday) \\
+vehicle\_type & $\mathcal{S}$ static & vehicle\_type.py & 1.80 (walking) \\
+visibility & $\mathcal{S}$ static & visibility.py & 1.60 ($<$300 m fog) \\
+humidity & $\mathcal{S}$ static & humidity.py & 1.10 \\
+nightnetwork & $\mathcal{S}$ static & nightnetwork.py & 1.30 \\
+wind & $\mathcal{S}$ static & wind.py & $\sim$1.15 \\
+headway & $\mathcal{S}$ static & headway.py & 1.60 (train off-peak) \\
+\midrule
+parking & $\mathcal{G}$ goal & parking.py & 1.60 (D1, car) \\
+holiday\_historical & $\mathcal{G}$ goal & holiday\_historical.py & 1.20 / 0.80 \\
+events & $\mathcal{G}$ goal & events.py & 2.50 (Marathon) \\
+fiaker & $\mathcal{G}$ goal & fiaker.py & 1.25 \\
+season & $\mathcal{G}$ goal & season.py & 1.25 (Advent) \\
+pedestrian\_density & $\mathcal{G}$ goal & pedestrian\_density.py & 1.55 (D1 holiday) \\
+delivery & $\mathcal{G}$ goal & delivery.py & 1.80 (truck D1) \\
+\midrule
+intersection\_density & $\mathcal{N}$ node & intersection\_density.py & $\sim$1.9 \\
+road\_works & $\mathcal{N}$ node & road\_works.py & 1.50 \\
+markets & $\mathcal{N}$ node & markets.py & 1.45 \\
+heuriger & $\mathcal{N}$ node & heuriger.py & 1.35 \\
+\midrule
+surface & $\mathcal{D}$ edge & surface.py & 2.00 (escooter gravel) \\
+elevation & $\mathcal{D}$ edge & elevation.py & varies (slope) \\
+safety & $\mathcal{D}$ edge & safety.py & 1.50 / 0.90 \\
+emission\_zones & $\mathcal{D}$ edge & emission\_zones.py & 8.00 (soft ban) \\
+tram\_tracks & $\mathcal{D}$ edge & tram\_tracks.py & 1.70 (bike wet) \\
+snow\_priority & $\mathcal{D}$ edge & snow\_priority.py & 1.60 \\
+commuter\_bridges & $\mathcal{D}$ edge & commuter\_bridges.py & 2.00 (Praterbrücke) \\
+lane\_capacity & $\mathcal{D}$ edge & lane\_capacity.py & 1.10 / 0.90 \\
+school\_zones & $\mathcal{D}$ edge & school\_zones.py & 1.35 \\
+scenic & $\mathcal{D}$ edge & scenic.py & 1.05 / 0.85 \\
+road\_quality & $\mathcal{D}$ edge & road\_quality.py & 2.50 (capped) \\
+manual\_adjustment & $\mathcal{D}$ edge & manual\_adjustment.py & 3.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

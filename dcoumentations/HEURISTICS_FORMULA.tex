@@ -1,0 +1,238 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{booktabs}
+
+\DeclareMathOperator{\haversine}{haversine}
+\newcommand{\M}{\mathcal{M}}
+\newcommand{\Kmax}{K_{\max}}
+\newcommand{\dhat}{d_{\text{hav}}}
+\newcommand{\Adj}{\text{adj}}
+
+\title{\textbf{Vienna Traffic Router — Unified Heuristic Formula}}
+\author{src/heuristics/ Orchestrator}
+\date{April 2026}
+
+\begin{document}
+
+\maketitle
+
+\section*{Complete Heuristic Composition}
+
+The composite heuristic used by all eight pathfinding algorithms is defined as:
+
+\[
+h(n, g) := \min\left\{ \dhat \cdot \M, \dhat \cdot \Kmax \right\}
+\]
+
+Where:
+\begin{itemize}
+  \item $\dhat = \haversine(n_\phi, n_\lambda; g_\phi, g_\lambda) \in \mathbb{R}_{>0}$ — Haversine distance (metres)
+  \item $\M \in \mathbb{R}_{>0}$ — composite multiplier (multiplicatively composed)
+  \item $\Kmax = 50.0$ — hard cap ensuring $\M \in (0, 50]$ for bounded suboptimality
+\end{itemize}
+
+\section*{Composite Multiplier: Three Tiers}
+
+The multiplier $\M$ decomposes into three multiplicative tiers:
+
+\[
+\M = \M_{\text{static}} \cdot \M_{\text{goal}} \cdot \M_{\text{dyn}}
+\]
+
+where $\M_{\text{dyn}} = \M_{\text{edge}} \cdot \M_{\text{node}}$ aggregates dynamic per-node contributions.
+
+\subsection*{Tier 1: Static Multipliers (Pre-computed at Closure Build)}
+
+Computed \textit{once} before pathfinding; depend only on request parameters $\theta$:
+
+\[
+\M_{\text{static}}(\theta) = \prod_{i \in I_{\text{static}}} m_i \;\; \text{where} \;\; I_{\text{static}} = \{\text{weather}, \text{time}, \text{vehicle}, \text{vis}, \text{humidity}, \text{wind}, \text{night}, \text{headway}\}
+\]
+
+\begin{center}
+\begin{tabular}{ll}
+\textbf{Weight} & \textbf{Source} \\
+$m_{\text{weather}}$ & Rain, snow, fog, black-ice inference (1.0–2.0) \\
+$m_{\text{time}}$ & Rush-hour congestion by (hour, day-of-week) (1.0–1.35) \\
+$m_{\text{vehicle}}$ & Vehicle base speed (car, motorcycle, bus, walking, etc.) (0.85–1.80) \\
+$m_{\text{vis}}$ & Visibility in metres; fog penalty (1.0–1.3) \\
+$m_{\text{humidity}}$ & Moisture-related road conditions (1.0–1.2) \\
+$m_{\text{wind}}$ & Wind speed and direction (vehicle-dependent) (1.0–1.4) \\
+$m_{\text{night}}$ & Reduced road availability at night (1.0–1.5) \\
+$m_{\text{headway}}$ & Transit service frequency (buses, trams) (1.0–1.6) \\
+\end{tabular}
+\end{center}
+
+\subsection*{Tier 2: Goal-Dependent Multipliers (Constant Per Route)}
+
+Computed once per route based on destination district $\text{dist}(g)$; independent of frontier position:
+
+\[
+\M_{\text{goal}}(g, \theta) = \prod_{j \in I_{\text{goal}}} m_j(\text{dist}(g), \theta) \;\; \text{where} \;\; I_{\text{goal}} = \{\text{parking}, \text{holiday}, \text{events}, \text{fiaker}, \text{season}, \text{ped\_density}, \text{delivery}\}
+\]
+
+\begin{center}
+\begin{tabular}{ll}
+\textbf{Weight} & \textbf{Source} \\
+$m_{\text{parking}}$ & Parking difficulty by goal district (cars only) (1.0–1.6) \\
+$m_{\text{holiday}}$ & Holiday traffic patterns by goal district and date (1.0–1.4) \\
+$m_{\text{events}}$ & Concert/sports event congestion (date, hour, district) (1.0–2.0) \\
+$m_{\text{fiaker}}$ & Horse-carriage zones; horse-carriage vehicles (1.0–1.3) \\
+$m_{\text{season}}$ & Seasonal effects (salt roads, leaf cover) by month and district (1.0–1.25) \\
+$m_{\text{ped\_density}}$ & Foot traffic at destination (hour, date, district) (1.0–1.5) \\
+$m_{\text{delivery}}$ & Delivery-zone restrictions (vehicle, hour, district) (1.0–1.4) \\
+\end{tabular}
+\end{center}
+
+\subsection*{Tier 3: Dynamic Multipliers (Per Frontier Node)}
+
+Evaluated at \textit{each frontier node} $n$ during search. Decomposes into:
+
+\[
+\M_{\text{dyn}}(n) = \M_{\text{edge}}(n) \cdot \M_{\text{node}}(n)
+\]
+
+where $\M_{\text{edge}}(n) = \min_{e \in \Adj(n)} \left[\prod_{k \in I_{\text{edge}}} m_k(e)\right]$ uses cheapest outgoing edge as proxy, and
+
+\[
+\M_{\text{node}}(n, \theta) = \prod_{\ell \in I_{\text{node}}} m_\ell(n, \theta)
+\]
+
+\begin{center}
+\begin{tabular}{ll}
+\textbf{Weight} & \textbf{Source/Type} \\
+\multicolumn{2}{c}{\textit{Edge-Dependent}} \\
+$m_{\text{surface}}$ & Road surface (asphalt, cobblestone, gravel) (1.0–1.8) \\
+$m_{\text{elev}}$ & Elevation/slope penalty (1.0–1.5) \\
+$m_{\text{safety}}$ & Lighting + road class at night (pedestrians) (0.9–1.5) \\
+$m_{\text{emission}}$ & Low-emission zone entry penalties (1.0–1.3) \\
+$m_{\text{tram}}$ & Tram tracks in surface (rain/snow penalty) (1.0–1.4) \\
+$m_{\text{snow}}$ & Priority snow-clearing (main roads; seasonal) (0.8–1.3) \\
+$m_{\text{bridge}}$ & Bridge congestion at rush hour (1.0–1.5) \\
+$m_{\text{lane}}$ & Multi-lane preference for trucks (1.0–1.4) \\
+$m_{\text{school}}$ & School-zone speed limits (daytime weekdays) (1.0–1.2) \\
+$m_{\text{scenic}}$ & Scenic route incentive (tourism profile) (0.8–1.0) \\
+$m_{\text{quality}}$ & Pothole/repair penalties (1.0–1.3) \\
+$m_{\text{manual}}$ & User-applied edge overrides (0.5–3.0) \\
+\multicolumn{2}{c}{\textit{Node-Dependent}} \\
+$m_{\text{density}}$ & Intersection density (high density = slow) (1.0–1.4) \\
+$m_{\text{works}}$ & Geospatial proximity to construction zones (1.0–1.5) \\
+$m_{\text{market}}$ & Proximity to farmers' markets (weekly schedule) (1.0–1.3) \\
+$m_{\text{heuriger}}$ & Wine taverns in Grinzing (seasonal/hourly) (1.0–1.2) \\
+\end{tabular}
+\end{center}
+
+\section*{Composite Formula (Expanded)}
+
+The unified heuristic in full form:
+
+\[
+\boxed{
+h(n, g) = \min\left\{ \dhat \cdot \M_{\text{static}}(\theta) \cdot \M_{\text{goal}}(g, \theta) \cdot \M_{\text{dyn}}(n), \; \dhat \cdot \Kmax \right\}
+}
+\]
+
+With per-node multiplier:
+
+\[
+\begin{aligned}
+\M_{\text{dyn}}(n) &= \min_{e \in \Adj(n)} \left( \prod_{k \in I_{\text{edge}}} m_k(e) \right) \times \prod_{\ell \in I_{\text{node}}} m_\ell(n, \theta)
+\end{aligned}
+\]
+
+Fully expanded — all 30 heuristics:
+
+\[
+\begin{aligned}
+\M_{\text{composite}}(n, g, \theta) &= \underbrace{(m_w \cdot m_t \cdot m_v \cdot m_{vis} \cdot m_h \cdot m_{wind} \cdot m_n \cdot m_{hw})}_{\text{Static (8)}} \\
+&\quad \times \underbrace{(m_p \cdot m_{hol} \cdot m_e \cdot m_f \cdot m_s \cdot m_{pd} \cdot m_d)}_{\text{Goal (7)}} \\
+&\quad \times \underbrace{\min_e \left[ \prod_{k \in I_{\text{edge}}} m_k \right]}_{\text{Edge (12)}} \\
+&\quad \times \underbrace{(m_{dens} \cdot m_{wr} \cdot m_{mkt} \cdot m_{hg})}_{\text{Node (4)}}
+\end{aligned}
+\]
+
+\section*{Key Properties}
+
+\begin{enumerate}
+  \item \textbf{Multiplicative composition:} $\M = \prod_i m_i$ — each multiplier scales Euclidean distance; no additive combinations.
+
+  \item \textbf{Lazy evaluation:}
+  \begin{itemize}
+    \item $\M_{\text{static}}$ — \textit{once} per search (closure factory pattern)
+    \item $\M_{\text{goal}}$ — once per route (constant for all $n$ on same path)
+    \item $\M_{\text{edge}}, \M_{\text{node}}$ — \textit{per frontier node} (hot path)
+  \end{itemize}
+
+  \item \textbf{Identity default:} Each weight $m_i \in [0, +\infty)$ defaults to $1.0$ (multiplicative identity, no effect).
+
+  \item \textbf{Semantic interpretation:}
+  \begin{align*}
+    m_i < 1.0 &\Rightarrow \text{incentive (scenic route, snow-cleared road)} \\
+    m_i = 1.0 &\Rightarrow \text{neutral (default)} \\
+    m_i > 1.0 &\Rightarrow \text{penalty (congestion, potholes)}
+  \end{align*}
+
+  \item \textbf{Admissibility and bounded suboptimality:}
+  \begin{itemize}
+    \item $\M_{\text{static}} \cdot \M_{\text{goal}}$ admits \textit{monotonic} expansion on A*
+    \item Cheapest-edge proxy ensures $\M_{\text{edge}}(n)$ never overestimates from $n$ twice
+    \item Hard cap $\M_{\text{composite}} \leq \Kmax$ ensures weighted A* is $\Kmax$-optimal (bounded gap)
+  \end{itemize}
+\end{enumerate}
+
+\section*{Summary Table: All 30 Heuristics}
+
+\begin{center}
+\small
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Category} & \textbf{ID} & \textbf{Weight} & \textbf{Tier} \\
+\hline
+\multirow{5}{*}{Environmental} & weather & $m_w$ & Static \\
+& visibility & $m_{vis}$ & Static \\
+& humidity & $m_h$ & Static \\
+& wind & $m_{wind}$ & Static \\
+& season & $m_s$ & Goal \\
+\hline
+\multirow{5}{*}{Temporal} & time\_of\_day & $m_t$ & Static \\
+& holiday\_historical & $m_{hol}$ & Goal \\
+& events & $m_e$ & Goal \\
+& headway & $m_{hw}$ & Static \\
+& nightnetwork & $m_n$ & Static \\
+\hline
+\multirow{3}{*}{Vehicle} & vehicle\_type & $m_v$ & Static \\
+& vehicle\_type\_routing & (binary gate) & Edge \\
+& delivery & $m_d$ & Goal \\
+\hline
+\multirow{6}{*}{Road Geometry} & surface & $m_{sf}$ & Edge \\
+& elevation & $m_{el}$ & Edge \\
+& lane\_capacity & $m_{ln}$ & Edge \\
+& tram\_tracks & $m_{tr}$ & Edge \\
+& snow\_priority & $m_{sn}$ & Edge \\
+& road\_quality & $m_q$ & Edge \\
+\hline
+\multirow{6}{*}{Safety/Regulation} & safety & $m_{saf}$ & Edge \\
+& school\_zones & $m_{sch}$ & Edge \\
+& emission\_zones & $m_{em}$ & Edge \\
+& commuter\_bridges & $m_{br}$ & Edge \\
+& road\_works & $m_{wr}$ & Node \\
+& manual\_adjustment & $m_{ma}$ & Edge \\
+\hline
+\multirow{5}{*}{Urban Features} & intersection\_density & $m_{dens}$ & Node \\
+& pedestrian\_density & $m_{pd}$ & Goal \\
+& markets & $m_{mkt}$ & Node \\
+& heuriger & $m_{hg}$ & Node \\
+& fiaker & $m_f$ & Goal \\
+\hline
+\multirow{2}{*}{Destination} & parking & $m_p$ & Goal \\
+& scenic & $m_{sc}$ & Edge \\
+\hline
+\end{tabular}
+\end{center}
+
+\end{document}
