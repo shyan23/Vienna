@@ -64,8 +64,9 @@ def run_all(
         heuristic_fn = _default_heuristic
 
     graph = load_graph()
-    start_id = nearest_node(graph, start_lat, start_lon)
-    goal_id = nearest_node(graph, goal_lat, goal_lon)
+    vehicle = params.get("vehicle_type", "car")
+    start_id = nearest_node(graph, start_lat, start_lon, vehicle)
+    goal_id = nearest_node(graph, goal_lat, goal_lon, vehicle)
 
     log.info("START  %s → %s  (graph: %d nodes, %d edges)",
              start_id, goal_id, len(graph["nodes"]), len(graph["edges"]))

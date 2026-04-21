@@ -93,6 +93,20 @@
               <button class="weather-btn" data-weather="heavy_snow">❄️<br><small>Blizzard</small></button>
             </div>
             <div id="weather-caption" class="weather-caption"></div>
+
+            <div class="field-label" style="margin-top:12px">
+              ⚡ Speed Preference
+              <span class="field-hint">longer road, faster travel</span>
+            </div>
+            <div class="slider-row">
+              <span class="small muted">📏 Shortest</span>
+              <input type="range" id="speed-pref-slider" min="0" max="100" value="0" class="param-slider">
+              <span class="small muted">⚡ Fastest</span>
+            </div>
+            <div class="speed-pref-caption">
+              <span id="speed-pref-val">Off</span>
+              <span id="speed-pref-desc" class="muted"> — distance-optimal (default)</span>
+            </div>
           </div>
         </section>
 

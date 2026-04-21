@@ -6,6 +6,7 @@ const Sidebar = (() => {
     weather: 'clear',
     temperature: 15, humidity: 60, visibility_m: 5000,
     wind_speed: 3,   wind_deg: 180,
+    speed_preference: 0.0,
     hour: new Date().getHours(), minute: new Date().getMinutes(),
     day_of_week: new Date().getDay(), month: new Date().getMonth() + 1,
     date: todayISO(),
@@ -78,6 +79,25 @@ const Sidebar = (() => {
     state.date = now.toISOString().slice(0, 10);
   }
 
+  const SPEED_PREF_DESCS = [
+    [0,   'Off',  '— distance-optimal (default)'],
+    [20,  '20%',  '— slight preference for arterials'],
+    [40,  '40%',  '— primary roads get ×0.70 bonus'],
+    [60,  '60%',  '— primary ×0.60, motorway ×0.42'],
+    [80,  '80%',  '— strong fast-road preference'],
+    [100, '100%', '— primary ×0.50, motorway ×0.30 (time-optimal)'],
+  ];
+
+  function updateSpeedPrefCaption(v) {
+    const valEl  = document.getElementById('speed-pref-val');
+    const descEl = document.getElementById('speed-pref-desc');
+    if (!valEl || !descEl) return;
+    const entry = SPEED_PREF_DESCS.slice().reverse().find(([thresh]) => v >= thresh)
+                  || SPEED_PREF_DESCS[0];
+    valEl.textContent  = entry[1];
+    descEl.textContent = ' ' + entry[2];
+  }
+
   function bindConditionSliders() {
     const bindings = [
       ['temp-slider', 'temp-val', 'temperature',  v => `${v}°C`],
@@ -95,6 +115,15 @@ const Sidebar = (() => {
         l.textContent = fmt(v);
       });
     });
+
+    const speedSlider = document.getElementById('speed-pref-slider');
+    if (speedSlider) {
+      speedSlider.addEventListener('input', () => {
+        const v = Number(speedSlider.value);
+        state.speed_preference = v / 100;
+        updateSpeedPrefCaption(v);
+      });
+    }
   }
 
   function buildRequest() {
@@ -110,6 +139,7 @@ const Sidebar = (() => {
       visibility_m: state.visibility_m,
       wind_speed: state.wind_speed,
       wind_deg: state.wind_deg,
+      speed_preference: state.speed_preference,
       hour: state.hour, minute: state.minute,
       day_of_week: state.day_of_week, month: state.month,
       date: state.date,

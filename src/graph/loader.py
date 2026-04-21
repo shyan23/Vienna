@@ -133,17 +133,30 @@ def is_edge_passable(graph: dict, edge_idx: int, vehicle: str | None) -> bool:
     return True  # unknown vehicle → allow all
 
 
-def nearest_node(graph: dict, lat: float, lon: float) -> str:
-    """Find the graph node closest to a lat/lon coordinate."""
+def nearest_node(graph: dict, lat: float, lon: float, vehicle: str | None = None) -> str:
+    """Find the graph node closest to a lat/lon coordinate.
+
+    If `vehicle` is given, prefer the closest node that has at least one
+    outgoing edge passable by that vehicle; fall back to absolute nearest
+    if none exist (shouldn't happen on a curated graph).
+    """
     from src.graph.builder import haversine
 
     best_id = None
     best_dist = float("inf")
+    best_passable_id = None
+    best_passable_dist = float("inf")
     for nid, node in graph["nodes"].items():
         d = haversine(lat, lon, node["lat"], node["lon"])
         if d < best_dist:
             best_dist = d
             best_id = nid
+        if vehicle and d < best_passable_dist:
+            for nb in graph["adjacency"].get(nid, []):
+                if is_edge_passable(graph, nb["edge_idx"], vehicle):
+                    best_passable_dist = d
+                    best_passable_id = nid
+                    break
     if best_id is None:
         raise ValueError("Graph has no nodes")
-    return best_id
+    return best_passable_id or best_id

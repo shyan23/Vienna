@@ -38,7 +38,8 @@ class FindPathRequest(BaseModel):
 
     enabled_heuristics: list[str] = []
     manual_overrides: list[dict] = []
-    w: float = 1.5  # Weighted A* weight
+    w: float = 1.5                  # Weighted A* weight
+    speed_preference: float = 0.0  # 0.0 = distance-optimal, 1.0 = time-optimal
 
 
 class ManualOverrideRequest(BaseModel):

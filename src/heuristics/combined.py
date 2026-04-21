@@ -55,6 +55,7 @@ from src.heuristics.time_of_day import get_time_multiplier
 from src.heuristics.tram_tracks import get_tram_track_multiplier
 from src.heuristics.vehicle_type import get_vehicle_multiplier
 from src.heuristics.visibility import get_visibility_multiplier
+from src.heuristics.speed_preference import get_speed_preference_multiplier
 from src.heuristics.weather import get_weather_multiplier, infer_black_ice
 from src.heuristics.wind import get_wind_multiplier
 
@@ -69,7 +70,7 @@ ALL_HEURISTIC_IDS = {
     "commuter_bridges", "markets", "heuriger", "season",
     "lane_capacity", "road_works", "humidity", "visibility",
     "pedestrian_density", "delivery", "nightnetwork",
-    "manual_adjustment", "road_quality",
+    "manual_adjustment", "road_quality", "speed_preference",
 }
 
 
@@ -100,6 +101,7 @@ def make_heuristic(params: dict) -> Callable:
     visibility_m: float = float(params.get("visibility_m", 5000))
     humidity: float = float(params.get("humidity", 60))
     overrides: dict[str, int] = params.get("manual_overrides_map") or {}
+    speed_weight: float = float(params.get("speed_preference", 0.0))
 
     # Resolve weather (promote to black_ice when the conditions align)
     weather = infer_black_ice(
@@ -198,6 +200,8 @@ def make_heuristic(params: dict) -> Callable:
                 if _enabled(enabled, "manual_adjustment"):
                     edge_key = f"{edge['from']}_{edge['to']}"
                     e_mult *= get_manual_multiplier(edge_key, overrides)
+                if _enabled(enabled, "speed_preference"):
+                    e_mult *= get_speed_preference_multiplier(edge, speed_weight)
                 if e_mult < best_edge_mult:
                     best_edge_mult = e_mult
             if best_edge_mult != float("inf"):
